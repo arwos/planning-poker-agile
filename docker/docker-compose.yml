@@ -1,0 +1,18 @@
+services:
+  planning-poker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: ${IMAGE:-planning-poker}:${TAG:-latest}
+    ports:
+      - "${HOST_PORT:-8080}:8080"
+    environment:
+      PLANNING_POKER_HTTP_HOST: "0.0.0.0"
+      PLANNING_POKER_HTTP_PORT: "8080"
+      PLANNING_POKER_ROOMS_MAX_CONCURRENT: ${ROOMS_MAX_CONCURRENT:-100}
+      PLANNING_POKER_ROOMS_MAX_ROLES: ${ROOMS_MAX_ROLES:-10}
+      PLANNING_POKER_ROOMS_MAX_STORY_POINTS: ${ROOMS_MAX_STORY_POINTS:-10}
+      PLANNING_POKER_WEBSOCKET_PING_INTERVAL: ${WEBSOCKET_PING_INTERVAL:-1s}
+      PLANNING_POKER_WEBSOCKET_MAX_MESSAGE_BYTES: ${WEBSOCKET_MAX_MESSAGE_BYTES:-32768}
+      PLANNING_POKER_CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:4200}
+    restart: unless-stopped

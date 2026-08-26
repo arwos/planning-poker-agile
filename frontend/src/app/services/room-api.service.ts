@@ -1,0 +1,33 @@
+import { Injectable } from "@angular/core";
+import { RoomState } from "../models/room";
+
+const apiBase =
+  location.port === "4200" ? "http://localhost:8080" : location.origin;
+
+@Injectable({ providedIn: "root" })
+export class RoomApiService {
+  async create(
+    cards: number[],
+    roles: string[],
+  ): Promise<{ id: string; url: string }> {
+    const response = await fetch(`${apiBase}/api/rooms`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cards, roles }),
+    });
+    if (!response.ok)
+      throw new Error(
+        (await response.text()) || "Check card values and roles.",
+      );
+    return response.json();
+  }
+  async get(id: string): Promise<RoomState> {
+    const response = await fetch(`${apiBase}/api/rooms/${id}`);
+    if (!response.ok)
+      throw new Error("This room is unavailable or has expired.");
+    return response.json();
+  }
+  webSocketURL(id: string): string {
+    return `${apiBase.replace(/^http/, "ws")}/ws/rooms/${id}`;
+  }
+}

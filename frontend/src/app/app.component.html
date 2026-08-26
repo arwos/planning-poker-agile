@@ -1,0 +1,230 @@
+<main>
+  <header>
+    <span class="mark">◆</span>
+    <div>
+      <small>THE AGILE ARCADE</small>
+      <h1>Planning poker</h1>
+    </div>
+    @if (mode() === "game") {
+      <button class="leave-button" type="button" (click)="leave()">
+        Leave room
+      </button>
+    }
+  </header>
+  @if (mode() === "create") {
+    <section class="hero">
+      <p class="eyebrow">Insert coin · Estimate together</p>
+      <h2>Make space for every<br /><em>point of view.</em></h2>
+      <p class="intro">
+        Create a room, invite your team, and find your estimate in a few calm
+        minutes.
+      </p>
+      <div class="card form">
+        <label
+          >Story points
+          <span class="chips story-point-chips">
+            @for (item of cards; track item) {
+              <button type="button" (click)="removeCard($index)">
+                {{ item }} ×
+              </button>
+            }</span
+          ><input
+            [(ngModel)]="newCard"
+            inputmode="decimal"
+            (keyup.enter)="addCard()"
+            placeholder="Add a number, press Enter" /></label
+        ><label
+          >Roles
+          <span class="chips">
+            @for (item of roles; track item) {
+              <button type="button" (click)="removeRole($index)">
+                {{ item }} ×
+              </button>
+            }</span
+          ><input
+            [(ngModel)]="newRole"
+            (keyup.enter)="addRole()"
+            placeholder="Add a role, press Enter" /></label
+        ><button class="primary" (click)="create()">
+          Create a room <span>↗</span>
+        </button>
+      </div>
+      @if (link()) {
+        <div class="result">
+          <strong>Your room is ready</strong><code>{{ link() }}</code
+          ><button type="button" (click)="copy(link())">
+            {{
+              copyStatus() === "success"
+                ? "Copied!"
+                : copyStatus() === "error"
+                  ? "Copy failed"
+                  : "Copy link"
+            }}</button
+          ><a [href]="link()">Enter room</a>
+        </div>
+      }
+      @if (error()) {
+        <p class="error" role="alert">{{ error() }}</p>
+      }
+    </section>
+  } @else if (mode() === "join") {
+    <section class="join">
+      <p class="eyebrow">JOIN THE ARCADE</p>
+      <h2>Ready to estimate?</h2>
+      <div class="card form">
+        <label
+          >Your name
+          <input
+            [(ngModel)]="name"
+            maxlength="40"
+            placeholder="Name or nickname"
+        /></label>
+        <fieldset class="role-picker">
+          <legend>Pick a role</legend>
+          <button
+            type="button"
+            class="role-card observer-card"
+            [class.selected-role]="role === ''"
+            (click)="selectRole('')"
+          >
+            Observer <small>no voting</small>
+          </button>
+          @for (item of room()?.roles; track item) {
+            <button
+              type="button"
+              class="role-card"
+              [style.--role-color]="roleColor(item)"
+              [class.selected-role]="role === item"
+              (click)="selectRole(item)"
+            >
+              {{ item }}
+            </button>
+          }
+        </fieldset>
+        <p class="hint">Choose Observer to join the table without voting.</p>
+        <button class="primary" [disabled]="!name.trim()" (click)="join()">
+          Join room <span>↗</span>
+        </button>
+      </div>
+      @if (error()) {
+        <p class="error" role="alert">{{ error() }}</p>
+      }
+    </section>
+  } @else {
+    <section class="game">
+      <div class="gamebar">
+        <div>
+          <p class="eyebrow">ROOM {{ room()?.id?.slice(0, 8) }}</p>
+          <h2>
+            {{ room()?.revealed ? "Results are in" : "Choose your estimate" }}
+          </h2>
+        </div>
+        <div
+          class="current-role"
+          [style.--role-color]="roleColor(me()?.role || '')"
+        >
+          <span>Your role</span><strong>{{ me()?.role || "Observer" }}</strong>
+        </div>
+      </div>
+      <div class="game-layout">
+        <div
+          class="table"
+          [style.--participant-count]="room()?.participants?.length || 1"
+        >
+          @for (person of room()?.participants; track person.id) {
+            <article
+              class="person"
+              [style.--role-color]="roleColor(person.role)"
+              [class.me]="person.id === selfId"
+              [style.--angle]="
+                participantAngle($index, room()?.participants?.length || 1)
+              "
+            >
+              <div class="avatar">
+                {{ person.name.slice(0, 1).toUpperCase() }}
+              </div>
+              <b>{{ person.name }}</b
+              ><small
+                >{{ person.lead ? "Lead · " : ""
+                }}{{ person.role || "Observer" }}</small
+              ><span class="status">{{
+                person.submitted ? "Voted" : "Thinking"
+              }}</span>
+              @if (room()?.revealed && person.vote !== undefined) {
+                <strong class="revealed">{{ person.vote }}</strong>
+              }
+            </article>
+          }
+        </div>
+        <aside class="control-panel">
+          <section class="panel-block results-block">
+            <div class="scoreboard">
+              <div class="average group-average total-average">
+                <span>Average</span
+                ><strong>{{
+                  room()?.revealed ? (room()?.average | number: "1.1-1") : "—"
+                }}</strong>
+              </div>
+              <div class="role-results">
+                @for (item of room()?.roles; track item) {
+                  @if (roleParticipantCount(item) > 0) {
+                    <div
+                      class="average group-average"
+                      [style.--role-color]="roleColor(item)"
+                    >
+                      <span>{{ item }} ({{ roleParticipantCount(item) }})</span
+                      ><strong>{{
+                        room()?.revealed &&
+                        room()?.roleAverages?.[item] !== undefined
+                          ? (room()?.roleAverages?.[item] | number: "1.1-1")
+                          : "—"
+                      }}</strong>
+                    </div>
+                  }
+                }
+              </div>
+            </div>
+          </section>
+          @if (me()?.lead) {
+            <section class="panel-block action-block">
+              <button class="reset-button" type="button" (click)="reset()">
+                Reset voting
+              </button>
+            </section>
+          }
+          @if (me()?.role) {
+            <section class="panel-block voting-block">
+              <div class="cards" aria-label="Story point cards">
+                @for (card of room()?.cards; track card) {
+                  <button
+                    [class.selected]="selected === card"
+                    [attr.aria-pressed]="selected === card"
+                    [disabled]="me()?.submitted || room()?.revealed"
+                    (click)="selected = card"
+                  >
+                    {{ card }}
+                  </button>
+                }
+              </div>
+              <button
+                class="primary vote"
+                [disabled]="
+                  selected === undefined || me()?.submitted || room()?.revealed
+                "
+                (click)="vote()"
+              >
+                {{ me()?.submitted ? "Vote submitted" : "Submit vote" }}
+              </button>
+            </section>
+          }
+          @if (error()) {
+            <p class="error" role="alert">{{ error() }}</p>
+          }
+        </aside>
+      </div>
+    </section>
+  }
+  <footer>
+    © <a href="https://osspkg.com/" target="_blank" class="nolink">The OSSPkg Team</a> 2026 - Now · NO TOKENS REQUIRED
+  </footer>
+</main>

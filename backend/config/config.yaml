@@ -1,0 +1,13 @@
+http:
+  host: "0.0.0.0"
+  port: 8080
+  read_header_timeout: 5s
+  write_timeout: 10s
+rooms:
+  max_concurrent: 100
+  max_roles: 10
+  max_story_points: 10
+websocket:
+  ping_interval: 1s
+  max_message_bytes: 32768
+cors_origins: []

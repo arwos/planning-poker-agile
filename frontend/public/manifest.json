@@ -1,0 +1,16 @@
+{
+  "name": "Planning Poker",
+  "short_name": "PP",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#070b18",
+  "theme_color": "#070b18",
+  "icons": [
+    {
+      "src": "/icon-pp.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

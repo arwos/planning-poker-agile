@@ -1,0 +1,460 @@
+.story-point-chips button {
+  border-color: #65e8ff66;
+  color: var(--cyan);
+}
+.role-picker {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.role-picker legend {
+  margin-bottom: 10px;
+  font: 500 13px "DM Mono";
+  color: var(--cyan);
+}
+.role-card {
+  min-width: 112px;
+  border: 1px solid #53658c;
+  border-radius: 10px;
+  background: #111c39;
+  color: var(--ink);
+  padding: 13px 12px;
+  font: 600 15px "Space Grotesk";
+  cursor: pointer;
+  text-align: left;
+}
+.role-card small {
+  display: block;
+  margin-top: 5px;
+  font-size: 9px;
+  color: var(--muted);
+}
+.role-card:hover,
+.role-card.selected-role {
+  border-color: var(--cyan);
+  background: linear-gradient(135deg, #173a5b, #342b63);
+  box-shadow: 0 0 0 1px #65e8ff55 inset;
+}
+.reset-center {
+  min-width: 132px;
+  white-space: nowrap;
+}
+.role-card.tone-0 {
+  border-color: #00e5ff;
+}
+.role-card.tone-1 {
+  border-color: #bd8cff;
+}
+.role-card.tone-2 {
+  border-color: #ff8d3b;
+}
+.role-card.tone-3 {
+  border-color: #62f5a5;
+}
+.role-card.tone-4 {
+  border-color: #8797ba;
+}
+.role-card.tone-0.selected-role {
+  background: linear-gradient(135deg, #0e4058, #164687);
+}
+.role-card.tone-1.selected-role {
+  background: linear-gradient(135deg, #3b2863, #5939a0);
+}
+.role-card.tone-2.selected-role {
+  background: linear-gradient(135deg, #5f2c27, #8d3d28);
+}
+.role-card.tone-3.selected-role {
+  background: linear-gradient(135deg, #164a40, #18745e);
+}
+.role-card.tone-4.selected-role {
+  background: linear-gradient(135deg, #27334d, #435273);
+}
+.gamebar {
+  display: block;
+}
+.game-layout {
+  display: grid;
+  grid-template-columns: minmax(420px, 1.1fr) minmax(330px, 0.9fr);
+  align-items: center;
+  gap: 38px;
+}
+.game-layout .table {
+  width: 100%;
+  height: 500px;
+  margin: 0;
+}
+.game-layout .person {
+  transform: translate(-50%, -50%) rotate(var(--angle)) translateY(-207px)
+    rotate(calc(-1 * var(--angle)));
+}
+.control-panel {
+  display: grid;
+  gap: 14px;
+}
+.panel-block {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(10, 17, 37, 0.48);
+  padding: 15px;
+}
+.scoreboard {
+  max-width: none;
+  width: 100%;
+  justify-content: flex-start;
+  align-items: stretch;
+  flex-wrap: nowrap;
+}
+.total-average {
+  flex: 0 0 112px;
+}
+.role-results {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  overflow: visible;
+}
+.group-average {
+  flex: 1 1 105px;
+}
+.action-block {
+  display: flex;
+  justify-content: center;
+}
+.action-block .reset-button {
+  margin: 0;
+  min-width: 180px;
+}
+.voting-block {
+  padding-bottom: 18px;
+}
+.voting-block .cards {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  overflow: visible;
+  padding: 0 0 16px;
+}
+.voting-block .vote {
+  margin: 0;
+  min-width: 100%;
+}
+@media (max-width: 940px) {
+  .game-layout {
+    grid-template-columns: 1fr;
+    gap: 28px;
+  }
+  .game-layout .table {
+    width: min(610px, 100%);
+    margin: auto;
+  }
+  .control-panel {
+    width: min(680px, 100%);
+    margin: auto;
+  }
+  .scoreboard {
+    flex-wrap: wrap;
+  }
+  .role-results {
+    min-width: 0;
+  }
+}
+@media (max-width: 620px) {
+  .game-layout {
+    gap: 22px;
+  }
+  .game-layout .table {
+    height: 370px;
+  }
+  .game-layout .person {
+    transform: translate(-50%, -50%) rotate(var(--angle)) translateY(-142px)
+      rotate(calc(-1 * var(--angle)));
+  }
+  .panel-block {
+    padding: 12px;
+  }
+  .scoreboard {
+    gap: 8px;
+  }
+  .total-average {
+    flex-basis: 98px;
+  }
+  .role-results {
+    gap: 8px;
+  }
+  .group-average {
+    min-width: 96px;
+  }
+  .voting-block .cards {
+    flex-wrap: nowrap;
+    overflow: auto;
+  }
+}
+.gamebar {
+  margin-bottom: 44px;
+}
+.control-panel {
+  gap: 24px;
+}
+.panel-block {
+  padding: 24px;
+}
+.scoreboard {
+  gap: 16px;
+}
+.role-results {
+  gap: 14px;
+}
+.action-block {
+  padding-block: 22px;
+}
+.voting-block {
+  padding-bottom: 26px;
+}
+.voting-block .cards {
+  gap: 14px;
+  padding-bottom: 26px;
+}
+@media (max-width: 620px) {
+  .gamebar {
+    margin-bottom: 30px;
+  }
+  .control-panel {
+    gap: 16px;
+  }
+  .panel-block {
+    padding: 16px;
+  }
+  .scoreboard {
+    gap: 10px;
+  }
+  .role-results {
+    gap: 10px;
+  }
+  .voting-block .cards {
+    gap: 10px;
+    padding-bottom: 18px;
+  }
+}
+.game-layout {
+  align-items: start;
+}
+.gamebar {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 24px;
+}
+.current-role {
+  min-width: 150px;
+  border: 2px solid #8797ba;
+  border-radius: 14px;
+  background: rgba(14, 23, 48, 0.72);
+  padding: 12px 15px;
+  text-align: right;
+}
+.current-role span {
+  display: block;
+  color: var(--muted);
+  font: 11px "DM Mono";
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.current-role strong {
+  display: block;
+  margin-top: 5px;
+  color: var(--ink);
+  font: 600 20px "Space Grotesk";
+}
+.current-role.tone-0 {
+  border-color: #00e5ff;
+}
+.current-role.tone-1 {
+  border-color: #bd8cff;
+}
+.current-role.tone-2 {
+  border-color: #ff8d3b;
+}
+.current-role.tone-3 {
+  border-color: #62f5a5;
+}
+@media (max-width: 620px) {
+  .gamebar {
+    align-items: start;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .current-role {
+    text-align: left;
+  }
+}
+.average[style*="--role-color"],
+.person[style*="--role-color"],
+.current-role[style*="--role-color"],
+.role-card[style*="--role-color"] {
+  border-color: var(--role-color);
+}
+.person[style*="--role-color"] .avatar {
+  background: var(--role-color);
+}
+.role-card[style*="--role-color"].selected-role {
+  background: color-mix(in srgb, var(--role-color) 28%, #111c39);
+}
+.game {
+  margin-top: 32px;
+}
+.gamebar {
+  align-items: start;
+}
+.game h2 {
+  margin: 8px 0;
+  font-size: clamp(29px, 3.5vw, 45px);
+}
+.scoreboard {
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  gap: 12px;
+  max-width: 65%;
+}
+.total-average {
+  min-width: 112px;
+  border-color: #f8edc5;
+}
+.role-results {
+  padding: 0;
+  gap: 10px;
+}
+.group-average {
+  min-width: 112px;
+  padding: 10px 12px;
+  border-width: 2px;
+}
+.group-average span {
+  font: 11px "DM Mono";
+  color: var(--muted);
+}
+.average {
+  border-color: var(--line);
+}
+.average.tone-0,
+.person.tone-0 {
+  border-color: #00e5ff;
+}
+.average.tone-1,
+.person.tone-1 {
+  border-color: #bd8cff;
+}
+.average.tone-2,
+.person.tone-2 {
+  border-color: #ff8d3b;
+}
+.average.tone-3,
+.person.tone-3 {
+  border-color: #62f5a5;
+}
+.person {
+  border-width: 2px;
+}
+.person.tone-0 .avatar {
+  background: linear-gradient(135deg, #00e5ff, #1478ff);
+}
+.person.tone-1 .avatar {
+  background: linear-gradient(135deg, #bd8cff, #6b3dff);
+}
+.person.tone-2 .avatar {
+  background: linear-gradient(135deg, #ffd166, #ff5b45);
+}
+.person.tone-3 .avatar {
+  background: linear-gradient(135deg, #62f5a5, #12a896);
+}
+.table {
+  width: min(610px, 100%);
+  height: 475px;
+  margin: 38px auto 4px;
+}
+.person {
+  width: 122px;
+  min-height: 112px;
+  padding: 8px;
+  transform: translate(-50%, -50%) rotate(var(--angle)) translateY(-196px)
+    rotate(calc(-1 * var(--angle)));
+}
+.avatar {
+  width: 34px;
+  height: 34px;
+  margin-bottom: 5px;
+  font-size: 16px;
+}
+.person b {
+  font-size: 15px;
+}
+.person small {
+  font-size: 11px;
+}
+.reset-center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 2;
+  min-width: 0;
+  margin: 0;
+  padding: 12px 14px;
+  transform: translate(-50%, -50%);
+  border-color: #ff9b70;
+  background: #211735;
+  color: var(--ink);
+  line-height: 1.3;
+}
+.cards {
+  padding-top: 72px;
+  padding-bottom: 12px;
+}
+@media (max-width: 800px) {
+  .scoreboard {
+    max-width: none;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+  .gamebar {
+    flex-direction: column;
+  }
+  .table {
+    height: 420px;
+  }
+  .person {
+    transform: translate(-50%, -50%) rotate(var(--angle)) translateY(-168px)
+      rotate(calc(-1 * var(--angle)));
+  }
+}
+@media (max-width: 620px) {
+  .game {
+    margin-top: 24px;
+  }
+  .group-average {
+    min-width: 98px;
+  }
+  .table {
+    height: 370px;
+    margin-top: 28px;
+  }
+  .person {
+    width: 96px;
+    min-height: 96px;
+    transform: translate(-50%, -50%) rotate(var(--angle)) translateY(-142px)
+      rotate(calc(-1 * var(--angle)));
+  }
+  .cards {
+    padding-top: 58px;
+  }
+}
+
+.nolink {
+  text-decoration: none !important;
+  cursor: pointer;
+  color: inherit;
+  border-style: dashed;
+  border-width: 0;
+  border-bottom-width: 1px;
+}
