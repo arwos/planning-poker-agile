@@ -4,6 +4,13 @@ import { RoomState } from "../models/room";
 const apiBase =
   location.port === "4200" ? "http://localhost:8080" : location.origin;
 
+export class RoomNotFoundError extends Error {
+  constructor() {
+    super("This room is unavailable or has expired.");
+    this.name = "RoomNotFoundError";
+  }
+}
+
 @Injectable({ providedIn: "root" })
 export class RoomApiService {
   async create(
@@ -23,8 +30,8 @@ export class RoomApiService {
   }
   async get(id: string): Promise<RoomState> {
     const response = await fetch(`${apiBase}/api/rooms/${id}`);
-    if (!response.ok)
-      throw new Error("This room is unavailable or has expired.");
+    if (response.status === 404) throw new RoomNotFoundError();
+    if (!response.ok) throw new Error("Could not load the room.");
     return response.json();
   }
   webSocketURL(id: string): string {

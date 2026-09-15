@@ -64,8 +64,10 @@ rooms:
 websocket:
   ping_interval: 1s
   max_message_bytes: 32768
-cors_origins: ["http://localhost:4200"]
+cors_origins: ["*"]
 ```
+
+The default `*` allows browser requests from any origin. Override `cors_origins` with an explicit list in production.
 
 Set any room limit to `0` to disable that limit.
 

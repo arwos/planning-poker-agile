@@ -76,7 +76,7 @@ func (s *Server) getRoom(w http.ResponseWriter, r *http.Request) {
 func (s *Server) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if len(s.CORSOrigins) == 0 {
+		if s.allowsAnyOrigin() {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 		} else {
 			for _, allowed := range s.CORSOrigins {
@@ -87,6 +87,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 			}
 		}
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(204)
 			return
@@ -95,9 +96,24 @@ func (s *Server) cors(next http.Handler) http.Handler {
 	})
 }
 
+func (s *Server) allowsAnyOrigin() bool {
+	if len(s.CORSOrigins) == 0 {
+		return true
+	}
+	for _, origin := range s.CORSOrigins {
+		if origin == "*" {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) originPatterns() []string {
 	patterns := make([]string, 0, len(s.CORSOrigins))
 	for _, origin := range s.CORSOrigins {
+		if origin == "*" {
+			continue
+		}
 		parsed, err := url.Parse(origin)
 		if err == nil && parsed.Host != "" {
 			patterns = append(patterns, parsed.Host)
@@ -141,28 +157,39 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "room not found", 404)
 		return
 	}
-	c, e := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: s.originPatterns()})
+	acceptOptions := &websocket.AcceptOptions{OriginPatterns: s.originPatterns()}
+	if s.allowsAnyOrigin() {
+		acceptOptions.InsecureSkipVerify = true
+	}
+	c, e := websocket.Accept(w, r, acceptOptions)
 	if e != nil {
 		return
 	}
 	c.SetReadLimit(s.MaxMessageBytes)
 	defer c.Close(websocket.StatusNormalClosure, "")
+	connectionCtx, cancelConnection := context.WithCancel(context.WithoutCancel(r.Context()))
+	defer cancelConnection()
 	var in message
-	if wsjson.Read(r.Context(), c, &in) != nil {
+	if wsjson.Read(connectionCtx, c, &in) != nil {
 		return
 	}
 	if in.Type != "join" {
-		_ = wsjson.Write(r.Context(), c, message{Type: "error", Error: "first message must be join"})
+		_ = wsjson.Write(connectionCtx, c, message{Type: "error", Error: "first message must be join"})
 		return
 	}
 	p := &room.Participant{ID: uuid.NewString(), Name: strings.TrimSpace(in.Name), Role: strings.TrimSpace(in.Role)}
 	if e = rm.Add(p); e != nil {
-		_ = wsjson.Write(r.Context(), c, message{Type: "error", Error: "name or role is invalid"})
+		_ = wsjson.Write(connectionCtx, c, message{Type: "error", Error: "name or role is invalid"})
 		return
 	}
 	ss := wstransport.New(c)
+	write := func(payload any) {
+		writeCtx, cancelWrite := context.WithTimeout(connectionCtx, 5*time.Second)
+		defer cancelWrite()
+		_ = ss.Write(writeCtx, payload)
+	}
 	s.Hub.Add(id, p.ID, func(payload any) {
-		_ = ss.Write(context.Background(), payload)
+		write(payload)
 	})
 	defer func() {
 		s.Hub.Remove(id, p.ID)
@@ -171,12 +198,12 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 		}
 		s.broadcast(id, map[string]any{"type": "participant_left", "state": rm.Snapshot()})
 	}()
-	_ = ss.Write(r.Context(), map[string]any{"type": "room_state", "state": rm.Snapshot(), "self": p.ID})
+	write(map[string]any{"type": "room_state", "state": rm.Snapshot(), "self": p.ID})
 	s.broadcast(id, map[string]any{"type": "participant_joined", "state": rm.Snapshot()})
-	go ss.Ping(r.Context(), s.PingInterval)
+	go ss.Ping(connectionCtx, s.PingInterval)
 	for {
 		var m message
-		if e := wsjson.Read(r.Context(), c, &m); e != nil {
+		if e := wsjson.Read(connectionCtx, c, &m); e != nil {
 			return
 		}
 		switch m.Type {

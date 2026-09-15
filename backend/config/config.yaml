@@ -10,4 +10,4 @@ rooms:
 websocket:
   ping_interval: 1s
   max_message_bytes: 32768
-cors_origins: []
+cors_origins: ["*"]

@@ -29,6 +29,9 @@ func (s *Session) Write(ctx context.Context, payload any) error {
 }
 
 func (s *Session) Ping(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = time.Second
+	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -36,9 +39,11 @@ func (s *Session) Ping(ctx context.Context, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			pingCtx, cancel := context.WithTimeout(ctx, interval)
 			s.mu.Lock()
-			err := s.Conn.Ping(ctx)
+			err := s.Conn.Ping(pingCtx)
 			s.mu.Unlock()
+			cancel()
 			if err != nil {
 				_ = s.Conn.Close(websocket.StatusGoingAway, "ping failed")
 				return

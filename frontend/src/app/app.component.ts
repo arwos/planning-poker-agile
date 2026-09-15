@@ -2,7 +2,10 @@ import { CommonModule } from "@angular/common";
 import { Component, inject, signal } from "@angular/core";
 import { FormsModule } from "@angular/forms";
 import { Participant, RoomState, ServerEvent } from "./models/room";
-import { RoomApiService } from "./services/room-api.service";
+import {
+  RoomApiService,
+  RoomNotFoundError,
+} from "./services/room-api.service";
 import { SoundService } from "./services/sound.service";
 
 type RoomSettings = { cards: number[]; roles: string[] };
@@ -10,6 +13,7 @@ const defaultCards = [0, 0.5, 1, 2, 3, 5, 8];
 const defaultRoles = ["Backend", "Frontend", "QA", "Analytic"];
 const roomSettingsKey = "planning-poker.room-settings";
 const lastRoleKey = "planning-poker.last-role";
+const reconnectIntervalMs = 5_000;
 
 @Component({
   selector: "app-root",
@@ -36,8 +40,9 @@ export class AppComponent {
   selfId = "";
   socket?: WebSocket;
   roomId = "";
-  reconnectAttempts = 0;
   leaving = false;
+  private reconnectTimer?: number;
+  private connectionRejected = false;
   constructor() {
     this.restoreSettings();
     const match = location.pathname.match(/^\/room\/([\w-]+)$/);
@@ -113,22 +118,36 @@ export class AppComponent {
     }
   }
   join(): void {
+    this.connect();
+  }
+  private connect(): void {
+    this.clearReconnectTimer();
     this.leaving = false;
+    this.connectionRejected = false;
     localStorage.setItem("poker-name", this.name.trim());
-    this.socket = new WebSocket(this.api.webSocketURL(this.roomId));
-    this.socket.onopen = (): void => {
-      this.reconnectAttempts = 0;
+    const socket = new WebSocket(this.api.webSocketURL(this.roomId));
+    this.socket = socket;
+    socket.onopen = (): void => {
+      if (this.socket !== socket) return;
       this.error.set("");
-      this.send("join", { name: this.name.trim(), role: this.role });
+      this.send("join", { name: this.name.trim(), role: this.role }, socket);
     };
-    this.socket.onmessage = (event: MessageEvent): void =>
+    socket.onmessage = (event: MessageEvent): void => {
+      if (this.socket !== socket) return;
       this.handleEvent(JSON.parse(event.data) as ServerEvent);
-    this.socket.onerror = (): void =>
-      this.error.set("Connection to the room failed.");
-    this.socket.onclose = (): void => this.reconnect();
+    };
+    socket.onerror = (): void => {
+      if (this.socket === socket) this.error.set("Connection to the room failed.");
+    };
+    socket.onclose = (): void => {
+      if (this.socket !== socket) return;
+      this.socket = undefined;
+      if (!this.connectionRejected) this.reconnect();
+    };
   }
   private handleEvent(event: ServerEvent): void {
     if (event.type === "error") {
+      this.connectionRejected = true;
       this.error.set(event.error || "Could not join the room.");
       return;
     }
@@ -143,12 +162,26 @@ export class AppComponent {
     }
   }
   private reconnect(): void {
-    if (!this.leaving && this.reconnectAttempts < 3) {
-      this.reconnectAttempts += 1;
-      this.error.set("Reconnecting to the room…");
-      window.setTimeout((): void => this.join(), this.reconnectAttempts * 1000);
-    } else if (!this.leaving)
-      this.error.set("Connection closed. Please reload to try again.");
+    if (this.leaving || this.reconnectTimer !== undefined) return;
+    this.error.set("Reconnecting to the room in 5 seconds…");
+    this.reconnectTimer = window.setTimeout((): void => {
+      this.reconnectTimer = undefined;
+      void this.tryReconnect();
+    }, reconnectIntervalMs);
+  }
+  private async tryReconnect(): Promise<void> {
+    if (this.leaving) return;
+    try {
+      await this.api.get(this.roomId);
+    } catch (error) {
+      if (error instanceof RoomNotFoundError) {
+        this.error.set(error.message);
+        return;
+      }
+      this.reconnect();
+      return;
+    }
+    this.connect();
   }
   me(): Participant | undefined {
     return this.room()?.participants.find(
@@ -183,12 +216,16 @@ export class AppComponent {
     this.send("reset", {});
     this.selected = undefined;
   }
-  send(type: string, payload: object): void {
-    this.socket?.send(JSON.stringify({ type, ...payload }));
+  send(type: string, payload: object, socket = this.socket): void {
+    if (socket?.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ type, ...payload }));
   }
   leave(): void {
     this.leaving = true;
-    this.socket?.close();
+    this.clearReconnectTimer();
+    const socket = this.socket;
+    this.socket = undefined;
+    socket?.close();
     location.assign("/");
   }
   async copy(value: string): Promise<void> {
@@ -208,6 +245,11 @@ export class AppComponent {
         roles: this.roles,
       } satisfies RoomSettings),
     );
+  }
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer === undefined) return;
+    window.clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = undefined;
   }
   private restoreSettings(): void {
     try {

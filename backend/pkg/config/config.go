@@ -105,7 +105,13 @@ func (c *Config) applyEnvironment() error {
 		c.WebSocket.PingInterval = value
 	}
 	if value, ok := os.LookupEnv("PLANNING_POKER_CORS_ORIGINS"); ok {
-		c.CORSOrigins = strings.Split(value, ",")
+		origins := strings.Split(value, ",")
+		c.CORSOrigins = c.CORSOrigins[:0]
+		for _, origin := range origins {
+			if origin = strings.TrimSpace(origin); origin != "" {
+				c.CORSOrigins = append(c.CORSOrigins, origin)
+			}
+		}
 	}
 	for _, item := range []struct {
 		name   string

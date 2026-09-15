@@ -34,9 +34,11 @@ HOST_PORT=8090 ROOMS_MAX_CONCURRENT=25 docker compose --file docker/docker-compo
 | `ROOMS_MAX_STORY_POINTS` | `10`                    | Maximum story points in a newly created room; `0` disables limit. |
 | `WEBSOCKET_PING_INTERVAL` | `1s`                    | Ping/pong interval as a Go duration. |
 | `WEBSOCKET_MAX_MESSAGE_BYTES` | `32768`                 | Maximum inbound WebSocket message size. |
-| `CORS_ORIGINS` | `http://localhost:8080` | Comma-separated browser origins allowed for cross-origin API/WebSocket access. |
+| `CORS_ORIGINS` | `*`                     | Comma-separated browser origins allowed for cross-origin API/WebSocket access; `*` allows all origins. |
 
 The binary reads YAML configuration first, then applies `PLANNING_POKER_*` environment variables. The compose file maps the variables above to that prefix. To override all configuration from a custom YAML file, mount it at `/app/config/config.yaml` or mount another path and set `CONFIG_PATH`.
+
+The default `*` allows browser requests from any origin. Set `CORS_ORIGINS` to an explicit comma-separated list in production.
 
 ## Docker Hub
 
