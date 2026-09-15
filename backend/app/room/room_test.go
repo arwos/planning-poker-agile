@@ -32,6 +32,42 @@ func TestVotesRevealAfterAllVotersSubmit(t *testing.T) {
 	}
 }
 
+func TestSubmittedVoteCanBeChangedBeforeReveal(t *testing.T) {
+	r, err := New([]float64{1, 3, 5}, []string{"Backend"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := &Participant{ID: "first", Name: "Ann", Role: "Backend"}
+	second := &Participant{ID: "second", Name: "Bob", Role: "Backend"}
+	if err := r.Add(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Add(second); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := r.Vote(first.ID, 1, true); err != nil || done {
+		t.Fatalf("first vote: done=%v err=%v", done, err)
+	}
+	if done, err := r.Vote(first.ID, 3, true); err != nil || done {
+		t.Fatalf("changed vote: done=%v err=%v", done, err)
+	}
+	if got := r.Votes[first.ID]; got != 3 {
+		t.Fatalf("stored vote=%v, want 3", got)
+	}
+	if !first.Submitted || first.Selected == nil || *first.Selected != 3 {
+		t.Fatalf("participant vote was not updated: submitted=%v selected=%v", first.Submitted, first.Selected)
+	}
+	if r.Revealed {
+		t.Fatal("room revealed before all participants voted")
+	}
+	if done, err := r.Vote(second.ID, 5, true); err != nil || !done {
+		t.Fatalf("second vote: done=%v err=%v", done, err)
+	}
+	if r.Average != 4 {
+		t.Fatalf("average=%v, want 4", r.Average)
+	}
+}
+
 func TestOnlyLeadCanReset(t *testing.T) {
 	r, _ := New(nil, []string{"Backend"})
 	lead := &Participant{ID: "lead", Name: "Lead", Role: "Backend"}

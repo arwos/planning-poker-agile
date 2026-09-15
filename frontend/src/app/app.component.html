@@ -11,6 +11,34 @@
       </button>
     }
   </header>
+  @if (reconnectStatus() !== "idle") {
+    <section
+      class="connection-status"
+      [class.connection-status--attempting]="reconnectStatus() === 'attempting'"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >
+      <span class="connection-status__indicator" aria-hidden="true"></span>
+      @if (reconnectStatus() === "waiting") {
+        <div class="connection-status__copy">
+          <strong>Connection interrupted</strong>
+          <span
+            >Reconnecting in
+            <b class="connection-status__countdown"
+              >{{ reconnectSeconds() }}</b
+            >
+            seconds…</span
+          >
+        </div>
+      } @else {
+        <div class="connection-status__copy">
+          <strong>Trying to reconnect…</strong>
+          <span>Checking the room and opening a new connection.</span>
+        </div>
+      }
+    </section>
+  }
   @if (mode() === "create") {
     <section class="hero">
       <p class="eyebrow">Insert coin · Estimate together</p>
@@ -49,20 +77,6 @@
           Create a room <span>↗</span>
         </button>
       </div>
-      @if (link()) {
-        <div class="result">
-          <strong>Your room is ready</strong><code>{{ link() }}</code
-          ><button type="button" (click)="copy(link())">
-            {{
-              copyStatus() === "success"
-                ? "Copied!"
-                : copyStatus() === "error"
-                  ? "Copy failed"
-                  : "Copy link"
-            }}</button
-          ><a [href]="link()">Enter room</a>
-        </div>
-      }
       @if (error()) {
         <p class="error" role="alert">{{ error() }}</p>
       }
@@ -199,7 +213,7 @@
                   <button
                     [class.selected]="selected === card"
                     [attr.aria-pressed]="selected === card"
-                    [disabled]="me()?.submitted || room()?.revealed"
+                    [disabled]="room()?.revealed"
                     (click)="selected = card"
                   >
                     {{ card }}
@@ -209,11 +223,11 @@
               <button
                 class="primary vote"
                 [disabled]="
-                  selected === undefined || me()?.submitted || room()?.revealed
+                  selected === undefined || room()?.revealed
                 "
                 (click)="vote()"
               >
-                {{ me()?.submitted ? "Vote submitted" : "Submit vote" }}
+                {{ me()?.submitted ? "Submit new vote" : "Submit vote" }}
               </button>
             </section>
           }
@@ -227,4 +241,56 @@
   <footer>
     © <a href="https://osspkg.com/" target="_blank" class="nolink">The OSSPkg Team</a> 2026 - Now · NO TOKENS REQUIRED
   </footer>
+  @if (link()) {
+    <div class="room-modal-backdrop">
+      <section
+        class="room-dialog room-ready"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="room-ready-title"
+        aria-describedby="room-ready-link"
+      >
+        <h2 id="room-ready-title">Your room is ready</h2>
+        <code id="room-ready-link">{{ link() }}</code>
+        <div class="room-ready__actions">
+          <button
+            class="room-ready__copy"
+            type="button"
+            autofocus
+            (click)="copy(link())"
+          >
+            {{
+              copyStatus() === "success"
+                ? "Copied!"
+                : copyStatus() === "error"
+                  ? "Copy failed"
+                  : "Copy link"
+            }}
+          </button>
+          <a class="primary room-ready__enter" [href]="link()"
+            >Enter room</a
+          >
+        </div>
+      </section>
+    </div>
+  }
+  @if (roomUnavailable()) {
+    <div class="room-modal-backdrop">
+      <section
+        class="room-dialog room-unavailable"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="room-unavailable-title"
+        aria-describedby="room-unavailable-message"
+      >
+        <h2 id="room-unavailable-title">Room unavailable</h2>
+        <p id="room-unavailable-message">
+          This room is unavailable or has expired.
+        </p>
+        <button class="primary" type="button" autofocus (click)="leave()">
+          Leave room
+        </button>
+      </section>
+    </div>
+  }
 </main>
