@@ -326,6 +326,24 @@
   flex: 1;
   min-width: 0;
 }
+.vote-actions .vote-skip {
+  flex: 0 0 clamp(132px, 34%, 176px);
+  border-color: #c6aaff;
+  background: linear-gradient(135deg, #624b8c, #8b63b7);
+  color: var(--ink);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.14) inset,
+    0 9px 25px #9b7bff33;
+  transition: 0.18s ease;
+}
+.vote-actions .vote-skip:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px #9b7bff55;
+}
+.vote-actions .vote-skip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 .voting-block .vote {
   margin: 0;
   min-width: 100%;
@@ -385,6 +403,9 @@
   }
   .vote-actions {
     flex-direction: column;
+  }
+  .vote-actions .vote-skip {
+    flex: 1 1 auto;
   }
 }
 .gamebar {

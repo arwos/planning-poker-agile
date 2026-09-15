@@ -251,6 +251,22 @@
               }
               <div class="vote-actions">
                 <button
+                  class="primary vote vote-skip"
+                  type="button"
+                  [disabled]="
+                    room()?.revealed || voteStatus() !== 'idle'
+                  "
+                  (click)="skipVote()"
+                >
+                  @if (voteStatus() === "skipping") {
+                    Skipping…
+                  } @else if (voteStatus() === "skipped") {
+                    Skipped ✓
+                  } @else {
+                    Skip voting
+                  }
+                </button>
+                <button
                   class="primary vote"
                   [disabled]="
                     selected === undefined ||
@@ -265,22 +281,6 @@
                     Vote submitted ✓
                   } @else {
                     {{ me()?.submitted ? "Submit new vote" : "Submit vote" }}
-                  }
-                </button>
-                <button
-                  class="primary vote"
-                  type="button"
-                  [disabled]="
-                    room()?.revealed || voteStatus() !== 'idle'
-                  "
-                  (click)="skipVote()"
-                >
-                  @if (voteStatus() === "skipping") {
-                    Skipping…
-                  } @else if (voteStatus() === "skipped") {
-                    Skipped ✓
-                  } @else {
-                    Skip voting
                   }
                 </button>
               </div>
