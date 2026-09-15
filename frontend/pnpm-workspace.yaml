@@ -3,3 +3,7 @@ allowBuilds:
   esbuild: true
   lmdb: true
   msgpackr-extract: true
+
+overrides:
+  hono: 4.13.5
+  js-yaml: 4.3.2
