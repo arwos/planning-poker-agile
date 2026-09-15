@@ -213,21 +213,42 @@
                   <button
                     [class.selected]="selected === card"
                     [attr.aria-pressed]="selected === card"
-                    [disabled]="room()?.revealed"
-                    (click)="selected = card"
+                    [disabled]="
+                      room()?.revealed || voteStatus() === 'sending'
+                    "
+                    (click)="selectCard(card)"
                   >
                     {{ card }}
                   </button>
                 }
               </div>
+              @if (voteStatus() === "sending") {
+                <p class="vote-feedback vote-feedback--pending" role="status">
+                  Sending your vote…
+                </p>
+              } @else if (voteStatus() === "confirmed") {
+                <p class="vote-feedback vote-feedback--success" role="status">
+                  Vote submitted ✓ Choose another card to change it.
+                </p>
+              } @else {
+                <p class="vote-feedback" aria-hidden="true"></p>
+              }
               <button
                 class="primary vote"
                 [disabled]="
-                  selected === undefined || room()?.revealed
+                  selected === undefined ||
+                  room()?.revealed ||
+                  voteStatus() !== 'idle'
                 "
                 (click)="vote()"
               >
-                {{ me()?.submitted ? "Submit new vote" : "Submit vote" }}
+                @if (voteStatus() === "sending") {
+                  Sending…
+                } @else if (voteStatus() === "confirmed") {
+                  Vote submitted ✓
+                } @else {
+                  {{ me()?.submitted ? "Submit new vote" : "Submit vote" }}
+                }
               </button>
             </section>
           }

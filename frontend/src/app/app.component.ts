@@ -10,6 +10,7 @@ import { SoundService } from "./services/sound.service";
 
 type RoomSettings = { cards: number[]; roles: string[] };
 type ReconnectStatus = "idle" | "waiting" | "attempting";
+type VoteStatus = "idle" | "sending" | "confirmed";
 const defaultCards = [0, 0.5, 1, 2, 3, 5, 8];
 const defaultRoles = ["Backend", "Frontend", "QA", "Analytic"];
 const roomSettingsKey = "planning-poker.room-settings";
@@ -36,6 +37,7 @@ export class AppComponent {
   readonly reconnectStatus = signal<ReconnectStatus>("idle");
   readonly reconnectSeconds = signal(0);
   readonly roomUnavailable = signal(false);
+  readonly voteStatus = signal<VoteStatus>("idle");
   cards = [...defaultCards];
   roles = [...defaultRoles];
   newCard = "";
@@ -168,6 +170,7 @@ export class AppComponent {
     socket.onclose = (): void => {
       if (this.socket !== socket) return;
       this.socket = undefined;
+      if (this.voteStatus() === "sending") this.voteStatus.set("idle");
       if (!this.connectionRejected) this.reconnect();
     };
   }
@@ -175,16 +178,25 @@ export class AppComponent {
     if (event.type === "error") {
       this.connectionRejected = true;
       this.stopReconnect();
+      this.voteStatus.set("idle");
       this.error.set(event.error || "Could not join the room.");
       return;
     }
     if (event.type === "participant_joined") this.sounds.join();
     if (event.type === "participant_left") this.sounds.leave();
     if (event.type === "results_revealed") this.sounds.reveal();
-    if (event.type === "voting_reset") this.selected = undefined;
+    if (event.type === "voting_reset") {
+      this.selected = undefined;
+      this.voteStatus.set("idle");
+    }
     if (event.state) {
       this.reconnectStatus.set("idle");
       this.reconnectSeconds.set(0);
+      const self = event.state.participants.find(
+        (participant): boolean => participant.id === this.selfId,
+      );
+      if (this.voteStatus() === "sending" && self?.submitted)
+        this.voteStatus.set("confirmed");
       this.room.set(event.state);
       if (event.self) this.selfId = event.self;
       this.mode.set("game");
@@ -245,17 +257,32 @@ export class AppComponent {
     this.role = role;
     localStorage.setItem(lastRoleKey, role);
   }
+  selectCard(card: number): void {
+    if (this.voteStatus() === "sending") return;
+    this.selected = card;
+    if (this.voteStatus() === "confirmed") this.voteStatus.set("idle");
+  }
   vote(): void {
-    if (this.selected !== undefined)
-      this.send("vote_submitted", { value: this.selected });
+    if (this.selected === undefined || this.voteStatus() !== "idle") return;
+    this.voteStatus.set("sending");
+    if (!this.send("vote_submitted", { value: this.selected })) {
+      this.voteStatus.set("idle");
+      this.error.set("Connection to the room failed.");
+    }
   }
   reset(): void {
     this.send("reset", {});
     this.selected = undefined;
+    this.voteStatus.set("idle");
   }
-  send(type: string, payload: object, socket = this.socket): void {
-    if (socket?.readyState !== WebSocket.OPEN) return;
-    socket.send(JSON.stringify({ type, ...payload }));
+  send(type: string, payload: object, socket = this.socket): boolean {
+    if (socket?.readyState !== WebSocket.OPEN) return false;
+    try {
+      socket.send(JSON.stringify({ type, ...payload }));
+      return true;
+    } catch {
+      return false;
+    }
   }
   leave(): void {
     this.leaving = true;

@@ -305,6 +305,18 @@
   overflow: visible;
   padding: 0 0 16px;
 }
+.vote-feedback {
+  min-height: 20px;
+  margin: 0 0 12px;
+  color: transparent;
+  font: 12px/1.4 "DM Mono";
+}
+.vote-feedback--pending {
+  color: var(--muted);
+}
+.vote-feedback--success {
+  color: #62f5a5;
+}
 .voting-block .vote {
   margin: 0;
   min-width: 100%;
