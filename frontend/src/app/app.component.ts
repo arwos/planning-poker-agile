@@ -18,6 +18,8 @@ const lastRoleKey = "planning-poker.last-role";
 const reconnectIntervalMs = 5_000;
 const clientIDKeyPrefix = "planning-poker.client-id.";
 const ownerTokenKeyPrefix = "planning-poker.owner-token.";
+const reconnectTokenKeyPrefix = "planning-poker.reconnect-token.";
+const nameKey = "planning-poker.name";
 
 @Component({
   selector: "app-root",
@@ -42,7 +44,7 @@ export class AppComponent {
   roles = [...defaultRoles];
   newCard = "";
   newRole = "";
-  name = localStorage.getItem("poker-name") ?? "";
+  name = "";
   role = "";
   selected?: number;
   selfId = "";
@@ -53,6 +55,10 @@ export class AppComponent {
   private reconnectCountdownTimer?: number;
   private connectionRejected = false;
   constructor() {
+    this.name = this.readStorage(nameKey) ?? this.readStorage("poker-name") ?? "";
+    if (this.readStorage(nameKey) === null && this.name) {
+      this.writeStorage(nameKey, this.name);
+    }
     this.restoreSettings();
     const match = location.pathname.match(/^\/room\/([\w-]+)$/);
     if (match) {
@@ -105,7 +111,7 @@ export class AppComponent {
         throw new Error("Add at least one story point and one role.");
       this.saveSettings();
       const data = await this.api.create(this.cards, this.roles);
-      localStorage.setItem(`${ownerTokenKeyPrefix}${data.id}`, data.owner_token);
+      this.writeStorage(`${ownerTokenKeyPrefix}${data.id}`, data.owner_token);
       this.link.set(`${location.origin}${data.url}`);
     } catch (error) {
       this.error.set(
@@ -118,7 +124,7 @@ export class AppComponent {
       const room = await this.api.get(this.roomId);
       this.roomUnavailable.set(false);
       this.room.set(room);
-      const savedRole = localStorage.getItem(lastRoleKey) ?? "";
+      const savedRole = this.readStorage(lastRoleKey) ?? "";
       this.role = room.roles.includes(savedRole) ? savedRole : "";
       this.mode.set("join");
     } catch (error) {
@@ -141,9 +147,10 @@ export class AppComponent {
     this.reconnectStatus.set(isReconnect ? "attempting" : "idle");
     this.leaving = false;
     this.connectionRejected = false;
-    localStorage.setItem("poker-name", this.name.trim());
+    this.writeStorage(nameKey, this.name.trim());
     const clientID = this.clientID();
     const ownerToken = this.ownerToken();
+    const reconnectToken = this.reconnectToken();
     const socket = new WebSocket(this.api.webSocketURL(this.roomId));
     this.socket = socket;
     socket.onopen = (): void => {
@@ -156,13 +163,22 @@ export class AppComponent {
           role: this.role,
           client_id: clientID,
           ...(ownerToken ? { owner_token: ownerToken } : {}),
+          ...(reconnectToken ? { reconnect_token: reconnectToken } : {}),
         },
         socket,
       );
     };
     socket.onmessage = (event: MessageEvent): void => {
       if (this.socket !== socket) return;
-      this.handleEvent(JSON.parse(event.data) as ServerEvent);
+      try {
+        const parsed: unknown = JSON.parse(String(event.data));
+        const serverEvent = this.parseServerEvent(parsed);
+        if (!serverEvent) throw new Error("invalid server event");
+        this.handleEvent(serverEvent);
+      } catch {
+        this.error.set("The room sent an invalid message.");
+        socket.close(1003, "invalid server event");
+      }
     };
     socket.onerror = (): void => {
       if (this.socket === socket && this.reconnectStatus() === "idle")
@@ -217,6 +233,9 @@ export class AppComponent {
       }
       this.room.set(event.state);
       if (event.self) this.selfId = event.self;
+      if (event.reconnect_token && event.self) {
+        this.writeStorage(`${reconnectTokenKeyPrefix}${this.roomId}`, event.reconnect_token);
+      }
       this.mode.set("game");
     }
   }
@@ -273,7 +292,7 @@ export class AppComponent {
   }
   selectRole(role: string): void {
     this.role = role;
-    localStorage.setItem(lastRoleKey, role);
+    this.writeStorage(lastRoleKey, role);
   }
   selectCard(card: number): void {
     if (
@@ -338,7 +357,7 @@ export class AppComponent {
     window.setTimeout((): void => this.copyStatus.set("idle"), 1800);
   }
   private saveSettings(): void {
-    localStorage.setItem(
+    this.writeStorage(
       roomSettingsKey,
       JSON.stringify({
         cards: this.cards,
@@ -348,16 +367,19 @@ export class AppComponent {
   }
   private clientID(): string {
     const key = `${clientIDKeyPrefix}${this.roomId}`;
-    const saved = localStorage.getItem(key);
+    const saved = this.readStorage(key);
     if (saved) return saved;
     const clientID =
       globalThis.crypto?.randomUUID?.() ??
       `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-    localStorage.setItem(key, clientID);
+    this.writeStorage(key, clientID);
     return clientID;
   }
   private ownerToken(): string {
-    return localStorage.getItem(`${ownerTokenKeyPrefix}${this.roomId}`) ?? "";
+    return this.readStorage(`${ownerTokenKeyPrefix}${this.roomId}`) ?? "";
+  }
+  private reconnectToken(): string {
+    return this.readStorage(`${reconnectTokenKeyPrefix}${this.roomId}`) ?? "";
   }
   private showRoomUnavailable(): void {
     this.stopReconnect();
@@ -382,7 +404,7 @@ export class AppComponent {
   private restoreSettings(): void {
     try {
       const saved = JSON.parse(
-        localStorage.getItem(roomSettingsKey) ?? "null",
+        this.readStorage(roomSettingsKey) ?? "null",
       ) as RoomSettings | null;
       if (!saved) return;
       if (
@@ -398,7 +420,92 @@ export class AppComponent {
       )
         this.roles = saved.roles.map((role) => role.trim());
     } catch {
-      localStorage.removeItem(roomSettingsKey);
+      this.removeStorage(roomSettingsKey);
+    }
+  }
+
+  private parseServerEvent(value: unknown): ServerEvent | undefined {
+    if (!value || typeof value !== "object") return undefined;
+    const event = value as Record<string, unknown>;
+    if (typeof event["type"] !== "string") return undefined;
+    if (event["self"] !== undefined && typeof event["self"] !== "string")
+      return undefined;
+    if (event["error"] !== undefined && typeof event["error"] !== "string")
+      return undefined;
+    if (
+      event["reconnect_token"] !== undefined &&
+      (typeof event["reconnect_token"] !== "string" ||
+        event["reconnect_token"].length === 0 ||
+        event["reconnect_token"].length > 128)
+    )
+      return undefined;
+    if (event["state"] !== undefined && !this.isRoomState(event["state"]))
+      return undefined;
+    return event as ServerEvent;
+  }
+
+  private isRoomState(value: unknown): boolean {
+    if (!value || typeof value !== "object") return false;
+    const state = value as Record<string, unknown>;
+    const participants = state["participants"];
+    const roleAverages = state["roleAverages"];
+    return (
+      typeof state["id"] === "string" &&
+      Array.isArray(state["cards"]) &&
+      state["cards"].every(
+        (card): boolean => typeof card === "number" && Number.isFinite(card),
+      ) &&
+      Array.isArray(state["roles"]) &&
+      state["roles"].every((role): boolean => typeof role === "string") &&
+      Array.isArray(participants) &&
+      participants.every((participant): boolean => {
+        if (!participant || typeof participant !== "object") return false;
+        const item = participant as Record<string, unknown>;
+        return (
+          typeof item["id"] === "string" &&
+          typeof item["name"] === "string" &&
+          typeof item["role"] === "string" &&
+          typeof item["lead"] === "boolean" &&
+          typeof item["submitted"] === "boolean" &&
+          typeof item["skipped"] === "boolean" &&
+          (item["vote"] === undefined ||
+            (typeof item["vote"] === "number" && Number.isFinite(item["vote"])))
+        );
+      }) &&
+      typeof state["revealed"] === "boolean" &&
+      typeof state["average"] === "number" &&
+      Number.isFinite(state["average"]) &&
+      typeof state["hasVotes"] === "boolean" &&
+      roleAverages !== null &&
+      typeof roleAverages === "object" &&
+      Object.values(roleAverages as Record<string, unknown>).every(
+        (average): boolean =>
+          typeof average === "number" && Number.isFinite(average),
+      )
+    );
+  }
+
+  private readStorage(key: string): string | null {
+    try {
+      return globalThis.localStorage?.getItem(key) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private writeStorage(key: string, value: string): void {
+    try {
+      globalThis.localStorage?.setItem(key, value);
+    } catch {
+      // Disabled or private browser storage must not block joining a room.
+    }
+  }
+
+  private removeStorage(key: string): void {
+    try {
+      globalThis.localStorage?.removeItem(key);
+    } catch {
+      // Ignore unavailable browser storage.
     }
   }
 }

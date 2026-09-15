@@ -19,13 +19,25 @@
               "browser": ""
             },
             "index": "src/index.html",
-            "optimization": { "fonts": false },
+            "optimization": {
+              "fonts": false,
+              "styles": { "inlineCritical": false }
+            },
             "outputHashing": "all"
           }
         },
         "serve": {
           "builder": "@angular/build:dev-server",
           "options": { "buildTarget": "poker:build" }
+        },
+        "test": {
+          "builder": "@angular/build:unit-test",
+          "options": {
+            "buildTarget": "poker:build",
+            "tsConfig": "tsconfig.spec.json",
+            "runner": "vitest",
+            "watch": false
+          }
         }
       }
     }

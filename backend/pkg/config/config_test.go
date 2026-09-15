@@ -40,3 +40,37 @@ func TestLoadAppliesEnvironmentOverrides(t *testing.T) {
 		t.Fatalf("unexpected overrides: %#v", c)
 	}
 }
+
+func TestLoadRejectsUnknownFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("http:\n  host: 127.0.0.1\n  typo_timeout: 1s\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected unknown configuration field to be rejected")
+	}
+}
+
+func TestLoadRejectsInvalidCORSOrigin(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("cors_origins: [\"https://example.com/path\"]\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected invalid CORS origin to be rejected")
+	}
+}
+
+func TestLoadAppliesSafeResourceDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(""), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Rooms.MaxConcurrent != 100 || c.Rooms.MaxParticipants != 32 || c.WebSocket.MaxConnections != 1000 || c.WebSocket.MessageBurst != 40 {
+		t.Fatalf("unexpected safe defaults: %#v", c)
+	}
+}

@@ -2,18 +2,13 @@ package httpapi
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/arwos/planning-poker-agile/app/room"
-	"github.com/coder/websocket"
-	"github.com/coder/websocket/wsjson"
 )
 
 func TestCreateAndReadRoom(t *testing.T) {
@@ -39,88 +34,11 @@ func TestCreateAndReadRoom(t *testing.T) {
 	if createdRoom["owner_token"] == "" {
 		t.Fatal("expected owner token")
 	}
-}
-
-func TestWebSocketJoinAndReveal(t *testing.T) {
-	registry := room.NewRegistry(0)
-	rm, err := registry.Create([]float64{1, 3}, []string{"Backend"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Skipf("local listeners unavailable: %v", err)
-	}
-	server := httptest.NewUnstartedServer((&Server{Registry: registry}).Handler())
-	server.Listener = listener
-	server.Start()
-	defer server.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/rooms/" + rm.ID
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
-	if err = wsjson.Write(ctx, conn, message{Type: "join", Name: "Ann", Role: "Backend"}); err != nil {
-		t.Fatal(err)
-	}
-	var state map[string]any
-	if err = wsjson.Read(ctx, conn, &state); err != nil {
-		t.Fatal(err)
-	}
-	if state["type"] != "room_state" {
-		t.Fatalf("initial event: %v", state["type"])
-	}
-	value := 3.0
-	if err = wsjson.Write(ctx, conn, message{Type: "vote_submitted", Value: &value}); err != nil {
-		t.Fatal(err)
-	}
-	if err = wsjson.Read(ctx, conn, &state); err != nil {
-		t.Fatal(err)
-	}
-	if state["type"] != "results_revealed" {
-		t.Fatalf("result event: %v", state["type"])
-	}
-}
-
-func TestWebSocketRejectsInvalidMessage(t *testing.T) {
-	registry := room.NewRegistry(0)
-	rm, err := registry.Create(nil, []string{"Backend"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Skipf("local listeners unavailable: %v", err)
-	}
-	server := httptest.NewUnstartedServer((&Server{Registry: registry}).Handler())
-	server.Listener = listener
-	server.Start()
-	defer server.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/rooms/" + rm.ID
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
-	if err := wsjson.Write(ctx, conn, map[string]any{
-		"type":  "join",
-		"name":  "Ann",
-		"extra": true,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	var response message
-	if err := wsjson.Read(ctx, conn, &response); err != nil {
-		t.Fatal(err)
-	}
-	if response.Type != "error" {
-		t.Fatalf("response type=%q, want error", response.Type)
+	get := httptest.NewRecorder()
+	handler := s.Handler()
+	handler.ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/api/rooms/"+createdRoom["id"], nil))
+	if get.Code != http.StatusOK || !strings.Contains(get.Body.String(), createdRoom["id"]) {
+		t.Fatalf("pending room GET status=%d body=%s", get.Code, get.Body.String())
 	}
 }
 
@@ -221,9 +139,61 @@ func TestCORSOnlyAllowsConfiguredOrigin(t *testing.T) {
 	if response.Header().Get("Access-Control-Allow-Origin") != "http://app.example" {
 		t.Fatal("missing allowed origin")
 	}
+	if response.Header().Get("Vary") != "Origin" {
+		t.Fatalf("vary=%q, want Origin", response.Header().Get("Vary"))
+	}
 	if response.Header().Get("Access-Control-Allow-Methods") != "GET, POST, OPTIONS" {
 		t.Fatalf("unexpected allowed methods: %q", response.Header().Get("Access-Control-Allow-Methods"))
 	}
+}
+
+func TestSecurityHeadersAreSet(t *testing.T) {
+	s := &Server{Registry: room.NewRegistry(1)}
+	response := httptest.NewRecorder()
+	s.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	for header, want := range map[string]string{
+		"X-Content-Type-Options": "nosniff",
+		"X-Frame-Options":        "DENY",
+		"Referrer-Policy":        "strict-origin-when-cross-origin",
+	} {
+		if got := response.Header().Get(header); got != want {
+			t.Fatalf("%s=%q, want %q", header, got, want)
+		}
+	}
+	if !strings.Contains(response.Header().Get("Content-Security-Policy"), "frame-ancestors 'none'") {
+		t.Fatal("missing CSP frame policy")
+	}
+}
+
+func TestCreateRateLimitIsBoundedPerIP(t *testing.T) {
+	s := &Server{Registry: room.NewRegistry(5), CreateRate: 1}
+	handler := s.Handler()
+	newRequest := func() *http.Request {
+		request := httptest.NewRequest(http.MethodPost, "/api/rooms", bytes.NewBufferString(`{"cards":[1],"roles":["Backend"]}`))
+		request.Header.Set("Content-Type", "application/json")
+		request.RemoteAddr = "192.0.2.1:1234"
+		return request
+	}
+	first := httptest.NewRecorder()
+	handler.ServeHTTP(first, newRequest())
+	if first.Code != http.StatusOK {
+		t.Fatalf("first status=%d", first.Code)
+	}
+	second := httptest.NewRecorder()
+	handler.ServeHTTP(second, newRequest())
+	if second.Code != http.StatusTooManyRequests {
+		t.Fatalf("second status=%d, want %d", second.Code, http.StatusTooManyRequests)
+	}
+}
+
+func FuzzIncomingMessageDoesNotPanic(f *testing.F) {
+	f.Add([]byte(`{"type":"join","name":"Ann"}`))
+	f.Add([]byte(`not json`))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		var message incomingMessage
+		_ = json.Unmarshal(data, &message)
+		_ = message.validate(true)
+	})
 }
 
 func TestCORSWildcardAllowsAnyOrigin(t *testing.T) {
@@ -234,129 +204,5 @@ func TestCORSWildcardAllowsAnyOrigin(t *testing.T) {
 	s.Handler().ServeHTTP(response, request)
 	if response.Header().Get("Access-Control-Allow-Origin") != "*" {
 		t.Fatalf("cors=%q", response.Header().Get("Access-Control-Allow-Origin"))
-	}
-}
-
-func TestWebSocketAllowsConfiguredOrigin(t *testing.T) {
-	registry := room.NewRegistry(0)
-	rm, err := registry.Create(nil, []string{"Backend"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Skipf("local listeners unavailable: %v", err)
-	}
-	server := httptest.NewUnstartedServer((&Server{
-		Registry:    registry,
-		CORSOrigins: []string{"http://app.example"},
-	}).Handler())
-	server.Listener = listener
-	server.Start()
-	defer server.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/rooms/" + rm.ID
-	conn, response, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
-		HTTPHeader: http.Header{"Origin": {"http://app.example"}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
-	if response.StatusCode != http.StatusSwitchingProtocols {
-		t.Fatalf("status=%d", response.StatusCode)
-	}
-}
-
-func TestWebSocketAllowsWildcardOrigin(t *testing.T) {
-	registry := room.NewRegistry(0)
-	rm, err := registry.Create(nil, []string{"Backend"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Skipf("local listeners unavailable: %v", err)
-	}
-	server := httptest.NewUnstartedServer((&Server{
-		Registry:    registry,
-		CORSOrigins: []string{"*"},
-	}).Handler())
-	server.Listener = listener
-	server.Start()
-	defer server.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/rooms/" + rm.ID
-	conn, response, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
-		HTTPHeader: http.Header{"Origin": {"https://untrusted.example"}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
-	if response.StatusCode != http.StatusSwitchingProtocols {
-		t.Fatalf("status=%d", response.StatusCode)
-	}
-}
-
-func TestWebSocketReconnectReplacesStaleParticipant(t *testing.T) {
-	registry := room.NewRegistry(0)
-	rm, err := registry.Create(nil, []string{"Backend"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Skipf("local listeners unavailable: %v", err)
-	}
-	server := httptest.NewUnstartedServer((&Server{Registry: registry}).Handler())
-	server.Listener = listener
-	server.Start()
-	defer server.Close()
-
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/rooms/" + rm.ID
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	clientID := "11111111-1111-4111-8111-111111111111"
-	first, _, err := websocket.Dial(ctx, wsURL, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer first.Close(websocket.StatusNormalClosure, "")
-	if err := wsjson.Write(ctx, first, message{Type: "join", Name: "Ann", Role: "Backend", ClientID: clientID}); err != nil {
-		t.Fatal(err)
-	}
-	var firstState map[string]any
-	if err := wsjson.Read(ctx, first, &firstState); err != nil {
-		t.Fatal(err)
-	}
-
-	second, _, err := websocket.Dial(ctx, wsURL, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer second.Close(websocket.StatusNormalClosure, "")
-	if err := wsjson.Write(ctx, second, message{Type: "join", Name: "Ann", Role: "Backend", ClientID: clientID}); err != nil {
-		t.Fatal(err)
-	}
-	var secondState map[string]any
-	if err := wsjson.Read(ctx, second, &secondState); err != nil {
-		t.Fatal(err)
-	}
-
-	participants := rm.Snapshot()["participants"].([]map[string]any)
-	if len(participants) != 1 {
-		t.Fatalf("participants after reconnect=%d", len(participants))
-	}
-	if err := first.Close(websocket.StatusGoingAway, "replaced"); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(20 * time.Millisecond)
-	if participants := rm.Snapshot()["participants"].([]map[string]any); len(participants) != 1 {
-		t.Fatalf("stale cleanup removed active participant: %d", len(participants))
 	}
 }

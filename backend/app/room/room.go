@@ -6,12 +6,16 @@
 package room
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"math"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/arwos/planning-poker-agile/app/voting"
@@ -22,11 +26,16 @@ var DefaultCards = []float64{0, .5, 1, 2, 3, 5, 8}
 var ErrNotFound = errors.New("room not found")
 var ErrInvalid = errors.New("invalid room data")
 var ErrCapacity = errors.New("room capacity reached")
+var ErrInvalidReconnect = errors.New("invalid reconnect token")
 
 const (
 	maxParticipantNameLength = 40
 	maxRoleNameLength        = 40
 	maxOwnerTokenLength      = 128
+	maxReconnectTokenLength  = 128
+	defaultMaxRooms          = 100
+	defaultMaxParticipants   = 32
+	reconnectRetention       = 10 * time.Minute
 )
 
 type Participant struct {
@@ -35,6 +44,30 @@ type Participant struct {
 	Selected                 *float64
 	clientID                 string
 	connectionID             string
+	reconnectTokenHash       string
+	connected                bool
+	disconnectedAt           time.Time
+}
+
+type ParticipantState struct {
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	Role      string   `json:"role"`
+	Lead      bool     `json:"lead"`
+	Submitted bool     `json:"submitted"`
+	Skipped   bool     `json:"skipped"`
+	Vote      *float64 `json:"vote,omitempty"`
+}
+
+type State struct {
+	ID           string             `json:"id"`
+	Cards        []float64          `json:"cards"`
+	Roles        []string           `json:"roles"`
+	Participants []ParticipantState `json:"participants"`
+	Revealed     bool               `json:"revealed"`
+	Average      float64            `json:"average"`
+	HasVotes     bool               `json:"hasVotes"`
+	RoleAverages map[string]float64 `json:"roleAverages"`
 }
 type Room struct {
 	mu                 sync.RWMutex
@@ -46,15 +79,18 @@ type Room struct {
 	Average            float64
 	RoleAverages       map[string]float64
 	Votes              map[string]float64
+	hasVotes           bool
 	ownerToken         string
 	ownerParticipantID string
+	maxParticipants    int
+	reconnectIndex     map[string]string
 }
 
 func New(cards []float64, roles []string) (*Room, error) {
-	return newRoom(cards, roles, 0, 0, "")
+	return newRoom(cards, roles, 0, 0, "", defaultMaxParticipants)
 }
 
-func newRoom(cards []float64, roles []string, maxCards, maxRoles int, ownerToken string) (*Room, error) {
+func newRoom(cards []float64, roles []string, maxCards, maxRoles int, ownerToken string, maxParticipants ...int) (*Room, error) {
 	ownerToken = strings.TrimSpace(ownerToken)
 	if ownerToken != "" && len(ownerToken) > maxOwnerTokenLength {
 		return nil, ErrInvalid
@@ -88,14 +124,20 @@ func newRoom(cards []float64, roles []string, maxCards, maxRoles int, ownerToken
 	if maxRoles > 0 && len(clean) > maxRoles {
 		return nil, fmt.Errorf("maximum %d roles allowed: %w", maxRoles, ErrInvalid)
 	}
+	participantLimit := defaultMaxParticipants
+	if len(maxParticipants) > 0 && maxParticipants[0] > 0 {
+		participantLimit = maxParticipants[0]
+	}
 	return &Room{
-		ID:           uuid.NewString(),
-		Cards:        cards,
-		Roles:        clean,
-		Participants: map[string]*Participant{},
-		Votes:        map[string]float64{},
-		RoleAverages: map[string]float64{},
-		ownerToken:   ownerToken,
+		ID:              uuid.NewString(),
+		Cards:           cards,
+		Roles:           clean,
+		Participants:    map[string]*Participant{},
+		Votes:           map[string]float64{},
+		RoleAverages:    map[string]float64{},
+		ownerToken:      ownerToken,
+		maxParticipants: participantLimit,
+		reconnectIndex:  map[string]string{},
 	}, nil
 }
 func (r *Room) Add(p *Participant) error {
@@ -104,10 +146,26 @@ func (r *Room) Add(p *Participant) error {
 }
 
 func (r *Room) AddConnection(p *Participant, clientID, ownerToken, connectionID string) (bool, error) {
+	replaced, _, err := r.addConnection(p, clientID, "", ownerToken, connectionID)
+	return replaced, err
+}
+
+func (r *Room) AddConnectionWithToken(p *Participant, clientID, reconnectToken, ownerToken, connectionID string) (bool, string, error) {
+	return r.addConnection(p, clientID, reconnectToken, ownerToken, connectionID)
+}
+
+func (r *Room) addConnection(p *Participant, clientID, reconnectToken, ownerToken, connectionID string) (bool, string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !utf8.ValidString(p.Name) || p.Name == "" || utf8.RuneCountInString(p.Name) > maxParticipantNameLength {
-		return false, ErrInvalid
+	r.purgeDisconnectedLocked(time.Now())
+	if p == nil || !utf8.ValidString(p.Name) || p.Name == "" || utf8.RuneCountInString(p.Name) > maxParticipantNameLength {
+		return false, "", ErrInvalid
+	}
+	if r.Participants == nil {
+		r.Participants = map[string]*Participant{}
+	}
+	if r.Votes == nil {
+		r.Votes = map[string]float64{}
 	}
 	if p.Role != "" {
 		ok := false
@@ -117,72 +175,92 @@ func (r *Room) AddConnection(p *Participant, clientID, ownerToken, connectionID 
 			}
 		}
 		if !ok {
-			return false, ErrInvalid
+			return false, "", ErrInvalid
 		}
 		if utf8.RuneCountInString(p.Role) > maxRoleNameLength {
-			return false, ErrInvalid
+			return false, "", ErrInvalid
 		}
 	}
+	if r.reconnectIndex == nil {
+		r.reconnectIndex = map[string]string{}
+	}
 	isOwner := r.isOwnerTokenLocked(ownerToken)
-	if clientID != "" {
-		for id, existing := range r.Participants {
-			if existing.clientID != clientID {
-				continue
-			}
-			p.ID = id
-			p.Lead = existing.Lead
-			if p.Role == existing.Role {
-				p.Submitted = existing.Submitted
-				p.Skipped = existing.Skipped
-				p.Selected = existing.Selected
-			} else {
-				delete(r.Votes, id)
-				p.Submitted = false
-				p.Skipped = false
-				p.Selected = nil
-			}
-			p.clientID = clientID
-			p.connectionID = connectionID
-			r.Participants[id] = p
-			if isOwner {
-				r.ownerParticipantID = id
-				r.promoteLeadLocked(id)
-			}
-			return true, nil
+	if reconnectToken != "" {
+		if len(strings.TrimSpace(reconnectToken)) > maxReconnectTokenLength {
+			return false, "", ErrInvalidReconnect
 		}
+		hash := hashReconnectToken(reconnectToken)
+		id, ok := r.reconnectIndex[hash]
+		existing := r.Participants[id]
+		if !ok || existing == nil || existing.clientID != clientID {
+			return false, "", ErrInvalidReconnect
+		}
+		return r.replaceParticipantLocked(p, existing, clientID, hash, reconnectToken, connectionID, isOwner), reconnectToken, nil
 	}
 	if isOwner && r.ownerParticipantID != "" {
 		if existing := r.Participants[r.ownerParticipantID]; existing != nil {
-			p.ID = existing.ID
-			p.Lead = existing.Lead
-			if p.Role == existing.Role {
-				p.Submitted = existing.Submitted
-				p.Skipped = existing.Skipped
-				p.Selected = existing.Selected
-			} else {
-				delete(r.Votes, p.ID)
-				p.Submitted = false
-				p.Skipped = false
-				p.Selected = nil
+			token, err := newReconnectToken()
+			if err != nil {
+				return false, "", err
 			}
-			p.clientID = clientID
-			p.connectionID = connectionID
-			r.Participants[p.ID] = p
-			r.promoteLeadLocked(p.ID)
-			return true, nil
+			hash := hashReconnectToken(token)
+			return r.replaceParticipantLocked(p, existing, clientID, hash, token, connectionID, true), token, nil
 		}
 	}
-	if len(r.Participants) == 0 {
+	if r.maxParticipants > 0 && len(r.Participants) >= r.maxParticipants {
+		return false, "", ErrCapacity
+	}
+	token, err := newReconnectToken()
+	if err != nil {
+		return false, "", err
+	}
+	hash := hashReconnectToken(token)
+	if r.activeParticipantCountLocked() == 0 {
 		p.Lead = true
 	}
 	p.clientID = clientID
 	p.connectionID = connectionID
+	p.reconnectTokenHash = hash
+	p.connected = true
+	p.disconnectedAt = time.Time{}
 	r.Participants[p.ID] = p
+	r.reconnectIndex[hash] = p.ID
 	if isOwner {
 		r.ownerParticipantID = p.ID
 		r.promoteLeadLocked(p.ID)
 	}
-	return false, nil
+	return false, token, nil
+}
+
+func (r *Room) replaceParticipantLocked(p, existing *Participant, clientID, hash, token, connectionID string, isOwner bool) bool {
+	p.ID = existing.ID
+	p.Lead = existing.Lead
+	if p.Role == existing.Role {
+		p.Submitted = existing.Submitted
+		p.Skipped = existing.Skipped
+		p.Selected = existing.Selected
+	} else {
+		delete(r.Votes, existing.ID)
+		if !r.Revealed {
+			r.hasVotes = len(r.Votes) > 0
+		}
+		p.Submitted = false
+		p.Skipped = false
+		p.Selected = nil
+	}
+	delete(r.reconnectIndex, existing.reconnectTokenHash)
+	p.clientID = clientID
+	p.connectionID = connectionID
+	p.reconnectTokenHash = hash
+	p.connected = true
+	p.disconnectedAt = time.Time{}
+	r.Participants[p.ID] = p
+	r.reconnectIndex[hash] = p.ID
+	if isOwner {
+		r.ownerParticipantID = p.ID
+		r.promoteLeadLocked(p.ID)
+	}
+	return true
 }
 
 func (r *Room) isOwnerTokenLocked(ownerToken string) bool {
@@ -191,6 +269,9 @@ func (r *Room) isOwnerTokenLocked(ownerToken string) bool {
 
 func (r *Room) promoteLeadLocked(id string) {
 	for participantID, participant := range r.Participants {
+		if participant == nil {
+			continue
+		}
 		participant.Lead = participantID == id
 	}
 }
@@ -198,31 +279,44 @@ func (r *Room) promoteLeadLocked(id string) {
 func (r *Room) Remove(id string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.purgeDisconnectedLocked(time.Now())
 	wasLead := r.Participants[id] != nil && r.Participants[id].Lead
-	delete(r.Participants, id)
-	if wasLead {
-		for _, participant := range r.Participants {
-			participant.Lead = true
-			break
+	if participant := r.Participants[id]; participant != nil {
+		delete(r.reconnectIndex, participant.reconnectTokenHash)
+		if !r.Revealed {
+			delete(r.Votes, id)
+			r.hasVotes = len(r.Votes) > 0
 		}
 	}
-	return len(r.Participants) == 0
+	delete(r.Participants, id)
+	if wasLead {
+		r.promoteFirstConnectedLocked()
+	}
+	return r.activeParticipantCountLocked() == 0
 }
 
 func (r *Room) RemoveConnection(id, connectionID string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.purgeDisconnectedLocked(time.Now())
 	participant := r.Participants[id]
-	if participant == nil || participant.connectionID != connectionID {
+	if participant == nil || !participant.connected || participant.connectionID != connectionID {
 		return false
 	}
 	wasLead := participant.Lead
-	delete(r.Participants, id)
+	if !r.Revealed {
+		delete(r.Votes, id)
+		r.hasVotes = len(r.Votes) > 0
+		participant.Submitted = false
+		participant.Skipped = false
+		participant.Selected = nil
+	}
+	participant.connected = false
+	participant.connectionID = ""
+	participant.disconnectedAt = time.Now()
+	participant.Lead = false
 	if wasLead {
-		for _, next := range r.Participants {
-			next.Lead = true
-			break
-		}
+		r.promoteFirstConnectedLocked()
 	}
 	return true
 }
@@ -230,13 +324,14 @@ func (r *Room) RemoveConnection(id, connectionID string) bool {
 func (r *Room) IsEmpty() bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return len(r.Participants) == 0
+	return r.activeParticipantCountLocked() == 0
 }
 func (r *Room) Vote(id string, value float64, submit bool) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.purgeDisconnectedLocked(time.Now())
 	p, ok := r.Participants[id]
-	if !ok || p.Role == "" || r.Revealed {
+	if !ok || p == nil || !p.connected || p.Role == "" || r.Revealed {
 		return false, ErrInvalid
 	}
 	if math.IsNaN(value) || math.IsInf(value, 0) {
@@ -256,6 +351,7 @@ func (r *Room) Vote(id string, value float64, submit bool) (bool, error) {
 	if submit {
 		p.Submitted = true
 		r.Votes[id] = value
+		r.hasVotes = true
 	} else {
 		p.Submitted = false
 		delete(r.Votes, id)
@@ -266,8 +362,9 @@ func (r *Room) Vote(id string, value float64, submit bool) (bool, error) {
 func (r *Room) SkipVote(id string) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.purgeDisconnectedLocked(time.Now())
 	p, ok := r.Participants[id]
-	if !ok || p.Role == "" || r.Revealed {
+	if !ok || p == nil || !p.connected || p.Role == "" || r.Revealed {
 		return false, ErrInvalid
 	}
 	p.Selected = nil
@@ -280,6 +377,9 @@ func (r *Room) SkipVote(id string) (bool, error) {
 func (r *Room) revealIfCompleteLocked() bool {
 	hasVoter := false
 	for _, participant := range r.Participants {
+		if participant == nil || !participant.connected {
+			continue
+		}
 		if participant.Role == "" {
 			continue
 		}
@@ -307,56 +407,146 @@ func (r *Room) revealIfCompleteLocked() bool {
 	for role, values := range byRole {
 		r.RoleAverages[role] = voting.Average(values)
 	}
+	r.hasVotes = len(vals) > 0
 	return true
 }
 func (r *Room) Reset(id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.purgeDisconnectedLocked(time.Now())
 	p := r.Participants[id]
-	if p == nil || !p.Lead {
+	if p == nil || !p.connected || !p.Lead {
 		return ErrInvalid
 	}
 	r.Revealed = false
 	r.Average = 0
 	r.Votes = map[string]float64{}
 	r.RoleAverages = map[string]float64{}
+	r.hasVotes = false
 	for _, x := range r.Participants {
+		if x == nil {
+			continue
+		}
 		x.Submitted = false
 		x.Skipped = false
 		x.Selected = nil
 	}
 	return nil
 }
-func (r *Room) Snapshot() map[string]any {
+func (r *Room) State() State {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	ps := []map[string]any{}
+	ps := make([]ParticipantState, 0, len(r.Participants))
 	for _, p := range r.Participants {
-		m := map[string]any{"id": p.ID, "name": p.Name, "role": p.Role, "lead": p.Lead, "submitted": p.Submitted, "skipped": p.Skipped}
-		if r.Revealed && p.Selected != nil {
-			m["vote"] = *p.Selected
+		if p == nil || !p.connected {
+			continue
 		}
-		ps = append(ps, m)
+		state := ParticipantState{ID: p.ID, Name: p.Name, Role: p.Role, Lead: p.Lead, Submitted: p.Submitted, Skipped: p.Skipped}
+		if r.Revealed && p.Selected != nil {
+			vote := *p.Selected
+			state.Vote = &vote
+		}
+		ps = append(ps, state)
 	}
-	return map[string]any{"id": r.ID, "cards": r.Cards, "roles": r.Roles, "participants": ps, "revealed": r.Revealed, "average": r.Average, "hasVotes": len(r.Votes) > 0, "roleAverages": r.RoleAverages}
+	roleAverages := make(map[string]float64, len(r.RoleAverages))
+	for role, average := range r.RoleAverages {
+		roleAverages[role] = average
+	}
+	return State{ID: r.ID, Cards: r.Cards, Roles: r.Roles, Participants: ps, Revealed: r.Revealed, Average: r.Average, HasVotes: r.hasVotes, RoleAverages: roleAverages}
+}
+
+// Snapshot preserves the original Go-facing shape for domain callers. HTTP and WebSocket
+// transports use State directly to avoid dynamic map allocations on every broadcast.
+func (r *Room) Snapshot() map[string]any {
+	state := r.State()
+	participants := make([]map[string]any, 0, len(state.Participants))
+	for _, p := range state.Participants {
+		item := map[string]any{"id": p.ID, "name": p.Name, "role": p.Role, "lead": p.Lead, "submitted": p.Submitted, "skipped": p.Skipped}
+		if p.Vote != nil {
+			item["vote"] = *p.Vote
+		}
+		participants = append(participants, item)
+	}
+	return map[string]any{"id": state.ID, "cards": state.Cards, "roles": state.Roles, "participants": participants, "revealed": state.Revealed, "average": state.Average, "hasVotes": state.HasVotes, "roleAverages": state.RoleAverages}
 }
 func (r *Room) String() string { return fmt.Sprintf("room %s", r.ID) }
 
+func (r *Room) activeParticipantCountLocked() int {
+	count := 0
+	for _, participant := range r.Participants {
+		if participant != nil && participant.connected {
+			count++
+		}
+	}
+	return count
+}
+
+func (r *Room) promoteFirstConnectedLocked() {
+	for participantID, participant := range r.Participants {
+		if participant == nil || !participant.connected {
+			continue
+		}
+		participant.Lead = true
+		for otherID, other := range r.Participants {
+			if otherID != participantID && other != nil {
+				other.Lead = false
+			}
+		}
+		return
+	}
+}
+
+func (r *Room) purgeDisconnectedLocked(now time.Time) {
+	for id, participant := range r.Participants {
+		if participant == nil || participant.connected || participant.disconnectedAt.IsZero() || now.Sub(participant.disconnectedAt) < reconnectRetention {
+			continue
+		}
+		delete(r.reconnectIndex, participant.reconnectTokenHash)
+		delete(r.Participants, id)
+		if r.ownerParticipantID == id {
+			r.ownerParticipantID = ""
+		}
+	}
+}
+
+// PurgeDisconnected removes expired reconnect identities without a background goroutine.
+func (r *Room) PurgeDisconnected(now time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.purgeDisconnectedLocked(now)
+}
+
 type Registry struct {
-	mu       sync.RWMutex
-	rooms    map[string]*Room
-	maxRooms int
-	maxRoles int
-	maxCards int
+	mu              sync.RWMutex
+	rooms           map[string]*Room
+	maxRooms        int
+	maxRoles        int
+	maxCards        int
+	maxParticipants int
+	pending         map[string]*Reservation
+}
+
+type Reservation struct {
+	ID         string
+	Cards      []float64
+	Roles      []string
+	OwnerToken string
+	ExpiresAt  time.Time
 }
 
 func NewRegistry(maxRooms int, limits ...int) *Registry {
-	registry := &Registry{rooms: map[string]*Room{}, maxRooms: maxRooms}
+	if maxRooms <= 0 {
+		maxRooms = defaultMaxRooms
+	}
+	registry := &Registry{rooms: map[string]*Room{}, pending: map[string]*Reservation{}, maxRooms: maxRooms, maxParticipants: defaultMaxParticipants}
 	if len(limits) > 0 {
 		registry.maxRoles = limits[0]
 	}
 	if len(limits) > 1 {
 		registry.maxCards = limits[1]
+	}
+	if len(limits) > 2 && limits[2] > 0 {
+		registry.maxParticipants = limits[2]
 	}
 	return registry
 }
@@ -369,10 +559,11 @@ func (x *Registry) CreateWithOwner(c []float64, roles []string, ownerToken strin
 }
 
 func (x *Registry) create(c []float64, roles []string, ownerToken string) (*Room, error) {
-	r, e := newRoom(c, roles, x.maxCards, x.maxRoles, ownerToken)
+	r, e := newRoom(c, roles, x.maxCards, x.maxRoles, ownerToken, x.maxParticipants)
 	if e == nil {
 		x.mu.Lock()
-		if x.maxRooms > 0 && len(x.rooms) >= x.maxRooms {
+		x.purgeExpiredLocked(time.Now())
+		if x.roomCountLocked() >= x.maxRooms {
 			x.mu.Unlock()
 			return nil, ErrCapacity
 		}
@@ -381,19 +572,110 @@ func (x *Registry) create(c []float64, roles []string, ownerToken string) (*Room
 	}
 	return r, e
 }
+
+func (x *Registry) ReserveWithOwner(c []float64, roles []string, ownerToken string, ttl time.Duration) (*Reservation, error) {
+	r, err := newRoom(c, roles, x.maxCards, x.maxRoles, ownerToken, x.maxParticipants)
+	if err != nil {
+		return nil, err
+	}
+	if ttl <= 0 {
+		ttl = 10 * time.Minute
+	}
+	reservation := &Reservation{ID: r.ID, Cards: r.Cards, Roles: r.Roles, OwnerToken: ownerToken, ExpiresAt: time.Now().Add(ttl)}
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.purgeExpiredLocked(time.Now())
+	if x.roomCountLocked() >= x.maxRooms {
+		return nil, ErrCapacity
+	}
+	x.pending[reservation.ID] = reservation
+	return reservation, nil
+}
+
+func (x *Registry) roomCountLocked() int {
+	return len(x.rooms) + len(x.pending)
+}
+
+func (x *Registry) purgeExpiredLocked(now time.Time) {
+	for id, reservation := range x.pending {
+		if !now.Before(reservation.ExpiresAt) {
+			delete(x.pending, id)
+		}
+	}
+}
+
+func (x *Registry) PublicState(id string) (State, error) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.purgeExpiredLocked(time.Now())
+	if r := x.rooms[id]; r != nil {
+		r.PurgeDisconnected(time.Now())
+		return r.State(), nil
+	}
+	reservation := x.pending[id]
+	if reservation == nil {
+		return State{}, ErrNotFound
+	}
+	return State{ID: reservation.ID, Cards: reservation.Cards, Roles: reservation.Roles, Participants: []ParticipantState{}, RoleAverages: map[string]float64{}}, nil
+}
+
+func (x *Registry) Join(id string, p *Participant, clientID, reconnectToken, ownerToken, connectionID string) (*Room, bool, string, error) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.purgeExpiredLocked(time.Now())
+	if r := x.rooms[id]; r != nil {
+		replaced, token, err := r.AddConnectionWithToken(p, clientID, reconnectToken, ownerToken, connectionID)
+		return r, replaced, token, err
+	}
+	reservation := x.pending[id]
+	if reservation == nil {
+		return nil, false, "", ErrNotFound
+	}
+	r, err := newRoom(reservation.Cards, reservation.Roles, x.maxCards, x.maxRoles, reservation.OwnerToken, x.maxParticipants)
+	if err != nil {
+		return nil, false, "", err
+	}
+	r.ID = reservation.ID
+	replaced, token, err := r.AddConnectionWithToken(p, clientID, reconnectToken, ownerToken, connectionID)
+	if err != nil {
+		return nil, false, "", err
+	}
+	delete(x.pending, id)
+	x.rooms[id] = r
+	return r, replaced, token, nil
+}
+
+func newReconnectToken() (string, error) {
+	var data [32]byte
+	if _, err := rand.Read(data[:]); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(data[:]), nil
+}
+
+func hashReconnectToken(token string) string {
+	hash := sha256.Sum256([]byte(token))
+	return string(hash[:])
+}
 func (x *Registry) Get(id string) (*Room, error) {
-	x.mu.RLock()
-	defer x.mu.RUnlock()
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.purgeExpiredLocked(time.Now())
 	r := x.rooms[id]
 	if r == nil {
 		return nil, ErrNotFound
 	}
+	r.PurgeDisconnected(time.Now())
 	return r, nil
 }
 func (x *Registry) DeleteIfEmpty(id string) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	if r := x.rooms[id]; r != nil && r.IsEmpty() {
-		delete(x.rooms, id)
+	x.purgeExpiredLocked(time.Now())
+	if r := x.rooms[id]; r != nil {
+		r.PurgeDisconnected(time.Now())
+		if r.IsEmpty() {
+			delete(x.rooms, id)
+		}
 	}
 }

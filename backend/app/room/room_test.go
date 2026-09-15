@@ -4,6 +4,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestVotesRevealAfterAllVotersSubmit(t *testing.T) {
@@ -169,12 +170,13 @@ func TestLeadTransfersWhenLeadLeaves(t *testing.T) {
 func TestReconnectReplacesParticipantAndProtectsNewConnection(t *testing.T) {
 	r, _ := New(nil, []string{"Backend"})
 	first := &Participant{ID: "first", Name: "Ann", Role: "Backend"}
-	if replaced, err := r.AddConnection(first, "client", "", "connection-1"); err != nil || replaced {
-		t.Fatalf("first connection: replaced=%v err=%v", replaced, err)
+	replaced, reconnectToken, err := r.AddConnectionWithToken(first, "client", "", "", "connection-1")
+	if err != nil || replaced || reconnectToken == "" {
+		t.Fatalf("first connection: replaced=%v token=%q err=%v", replaced, reconnectToken, err)
 	}
 	second := &Participant{ID: "second", Name: "Ann", Role: "Backend"}
-	if replaced, err := r.AddConnection(second, "client", "", "connection-2"); err != nil || !replaced {
-		t.Fatalf("reconnect: replaced=%v err=%v", replaced, err)
+	if replaced, returnedToken, err := r.AddConnectionWithToken(second, "client", reconnectToken, "", "connection-2"); err != nil || !replaced || returnedToken != reconnectToken {
+		t.Fatalf("reconnect: replaced=%v token=%q err=%v", replaced, returnedToken, err)
 	}
 	if second.ID != first.ID {
 		t.Fatalf("participant id changed: first=%q second=%q", first.ID, second.ID)
@@ -187,6 +189,44 @@ func TestReconnectReplacesParticipantAndProtectsNewConnection(t *testing.T) {
 	}
 	if !r.RemoveConnection(second.ID, "connection-2") {
 		t.Fatal("active connection was not removed")
+	}
+}
+
+func TestReconnectAfterDisconnectRestoresIdentityWithoutStaleVote(t *testing.T) {
+	r, _ := New([]float64{1, 3}, []string{"Backend"})
+	first := &Participant{ID: "first", Name: "Ann", Role: "Backend"}
+	other := &Participant{ID: "other", Name: "Bob", Role: "Backend"}
+	_, token, err := r.AddConnectionWithToken(first, "client", "", "", "connection-1")
+	if err != nil || token == "" {
+		t.Fatalf("first connection: token=%q err=%v", token, err)
+	}
+	if err := r.Add(other); err != nil {
+		t.Fatalf("second connection: %v", err)
+	}
+	if _, err := r.Vote(first.ID, 1, true); err != nil {
+		t.Fatalf("vote: %v", err)
+	}
+	if !r.RemoveConnection(first.ID, "connection-1") {
+		t.Fatal("connection was not removed")
+	}
+	if r.IsEmpty() {
+		t.Fatal("active participant must keep the room alive")
+	}
+	state := r.State()
+	if len(state.Participants) != 1 || state.HasVotes {
+		t.Fatalf("disconnected participant leaked into state: %#v", state)
+	}
+
+	reconnected := &Participant{ID: "second", Name: "Ann", Role: "Backend"}
+	replaced, returnedToken, err := r.AddConnectionWithToken(reconnected, "client", token, "", "connection-2")
+	if err != nil || !replaced || returnedToken != token {
+		t.Fatalf("reconnect: replaced=%v token=%q err=%v", replaced, returnedToken, err)
+	}
+	if reconnected.ID != first.ID {
+		t.Fatalf("participant identity changed: first=%q second=%q", first.ID, reconnected.ID)
+	}
+	if len(r.State().Participants) != 2 {
+		t.Fatal("reconnected participant is not active")
 	}
 }
 
@@ -218,7 +258,7 @@ func TestRoomOwnerRegainsLeadAfterReturning(t *testing.T) {
 	}
 
 	returningOwner := &Participant{ID: "owner-return", Name: "Owner", Role: "Backend"}
-	if replaced, err := r.AddConnection(returningOwner, "owner-client", "owner-token", "owner-2"); err != nil || replaced {
+	if replaced, err := r.AddConnection(returningOwner, "owner-client", "owner-token", "owner-2"); err != nil || !replaced {
 		t.Fatalf("owner return: replaced=%v err=%v", replaced, err)
 	}
 	if !returningOwner.Lead || guest.Lead {
@@ -278,4 +318,84 @@ func TestRegistryRespectsRoleAndCardLimits(t *testing.T) {
 	if _, err := registry.Create([]float64{1}, []string{"Backend", "QA", "Analytic"}); err == nil {
 		t.Fatal("expected role limit error")
 	}
+}
+
+func TestReconnectRequiresTokenForNetworkAPI(t *testing.T) {
+	r, err := New(nil, []string{"Backend"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := &Participant{ID: "first", Name: "Ann", Role: "Backend"}
+	_, token, err := r.AddConnectionWithToken(first, "client", "", "", "connection-1")
+	if err != nil || token == "" {
+		t.Fatalf("first connection: token=%q err=%v", token, err)
+	}
+	second := &Participant{ID: "second", Name: "Ann", Role: "Backend"}
+	if _, _, err := r.AddConnectionWithToken(second, "client", "wrong", "", "connection-2"); err != ErrInvalidReconnect {
+		t.Fatalf("wrong token error=%v, want %v", err, ErrInvalidReconnect)
+	}
+	if got := len(r.Participants); got != 1 {
+		t.Fatalf("participants after rejected reconnect=%d, want 1", got)
+	}
+	if replaced, returned, err := r.AddConnectionWithToken(second, "client", token, "", "connection-2"); err != nil || !replaced || returned != token {
+		t.Fatalf("valid reconnect: replaced=%v token=%q err=%v", replaced, returned, err)
+	}
+}
+
+func TestRemovingParticipantClearsUnrevealedVote(t *testing.T) {
+	r, err := New([]float64{1, 3}, []string{"Backend"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &Participant{ID: "p", Name: "Ann", Role: "Backend"}
+	other := &Participant{ID: "other", Name: "Bob", Role: "Backend"}
+	if err := r.Add(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Add(other); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Vote(p.ID, 1, true); err != nil {
+		t.Fatal(err)
+	}
+	r.Remove(p.ID)
+	if len(r.Votes) != 0 || r.Snapshot()["hasVotes"] != false {
+		t.Fatalf("stale vote remains: votes=%v state=%v", r.Votes, r.Snapshot())
+	}
+}
+
+func TestRegistryReservationExpiresAndActivatesAtomically(t *testing.T) {
+	registry := NewRegistry(1, 2, 2, 2)
+	reservation, err := registry.ReserveWithOwner([]float64{1}, []string{"Backend"}, "owner", time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	if _, err := registry.PublicState(reservation.ID); err != ErrNotFound {
+		t.Fatalf("expired reservation error=%v, want %v", err, ErrNotFound)
+	}
+	reservation, err = registry.ReserveWithOwner([]float64{1}, []string{"Backend"}, "owner", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &Participant{ID: "p", Name: "Ann", Role: "Backend"}
+	r, _, _, err := registry.Join(reservation.ID, p, "client", "", "owner", "connection")
+	if err != nil || r == nil {
+		t.Fatalf("join reservation: room=%v err=%v", r, err)
+	}
+	if _, err := registry.PublicState(reservation.ID); err != nil {
+		t.Fatalf("active room disappeared after join: %v", err)
+	}
+}
+
+func FuzzNewRoomDoesNotPanic(f *testing.F) {
+	f.Add([]byte("cards"), "Backend")
+	f.Add([]byte(""), "")
+	f.Fuzz(func(t *testing.T, data []byte, role string) {
+		cards := []float64{float64(len(data))}
+		if len(data) > 0 && data[0] == 0 {
+			cards[0] = math.NaN()
+		}
+		_, _ = New(cards, []string{role})
+	})
 }

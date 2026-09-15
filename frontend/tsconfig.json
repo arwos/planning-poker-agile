@@ -1,1 +1,1 @@
-{"compilerOptions":{"target":"ES2022","module":"ES2022","moduleResolution":"bundler","strict":true,"experimentalDecorators":true,"useDefineForClassFields":false,"skipLibCheck":true}}
+{"compilerOptions":{"target":"ES2022","module":"ES2022","moduleResolution":"bundler","strict":true,"experimentalDecorators":true,"useDefineForClassFields":false,"skipLibCheck":true},"exclude":["**/*.spec.ts","**/*.test.ts"]}

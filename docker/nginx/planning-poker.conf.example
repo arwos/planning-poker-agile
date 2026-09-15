@@ -1,0 +1,124 @@
+# Planning Poker reverse proxy for a host-installed Nginx.
+#
+# Install this file under /etc/nginx/conf.d/ or /etc/nginx/sites-enabled/.
+# The file is included from Nginx's `http` context, so `map` and the limit
+# zones must stay outside of `server {}`.
+#
+# Replace example.com and the certificate paths before enabling it.
+
+map $http_upgrade $planning_poker_connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+limit_req_zone $binary_remote_addr zone=planning_poker_room_creation:10m rate=10r/m;
+limit_conn_zone $binary_remote_addr zone=planning_poker_websocket_ip:10m;
+
+upstream planning_poker_backend {
+    server 127.0.0.1:8080;
+    keepalive 16;
+}
+
+server_tokens off;
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name example.com;
+
+    # Keep this location only if Certbot or another ACME client uses it.
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+        default_type text/plain;
+        try_files $uri =404;
+    }
+
+    location / {
+        return 308 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ecdh_curve X25519:secp256r1;
+    ssl_session_cache shared:planning_poker_tls:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    # Enable HSTS only when every subdomain of this domain is HTTPS-ready.
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    # The Go service already emits these headers. Hide upstream copies to
+    # avoid duplicate CSP/X-Frame-Options policies, then set one edge policy.
+    proxy_hide_header Content-Security-Policy;
+    proxy_hide_header Permissions-Policy;
+    proxy_hide_header Referrer-Policy;
+    proxy_hide_header X-Content-Type-Options;
+    proxy_hide_header X-Frame-Options;
+
+    add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; img-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' wss:" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+
+    client_max_body_size 32k;
+    client_header_timeout 10s;
+    client_body_timeout 10s;
+    keepalive_timeout 65s;
+
+    location = /api/rooms {
+        limit_req zone=planning_poker_room_creation burst=10 nodelay;
+        proxy_pass http://planning_poker_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Connection "";
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 15s;
+        proxy_read_timeout 15s;
+    }
+
+    location ^~ /ws/ {
+        limit_conn planning_poker_websocket_ip 64;
+        proxy_pass http://planning_poker_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $planning_poker_connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 75s;
+        proxy_send_timeout 15s;
+        proxy_buffering off;
+        proxy_request_buffering off;
+    }
+
+    location / {
+        proxy_pass http://planning_poker_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Connection "";
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 15s;
+        proxy_read_timeout 15s;
+    }
+
+    location ~ /\.(?!well-known) {
+        deny all;
+        access_log off;
+        log_not_found off;
+    }
+}

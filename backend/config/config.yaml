@@ -3,11 +3,20 @@ http:
   port: 8080
   read_header_timeout: 5s
   write_timeout: 10s
+  create_rate_per_minute: 10
 rooms:
   max_concurrent: 100
   max_roles: 10
   max_story_points: 10
+  max_participants: 32
+  pending_ttl: 10m
 websocket:
   ping_interval: 1s
   max_message_bytes: 32768
+  max_connections: 1000
+  join_timeout: 10s
+  message_rate_per_second: 20
+  message_burst: 40
+  outbound_queue_size: 32
+  write_timeout: 5s
 cors_origins: ["*"]

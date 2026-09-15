@@ -79,8 +79,16 @@ export class SoundService {
   }
 
   private audioContext(): AudioContext | undefined {
-    if (typeof window === "undefined") return undefined;
-    this.context ??= new AudioContext();
+    if (
+      typeof window === "undefined" ||
+      typeof window.AudioContext !== "function"
+    )
+      return undefined;
+    try {
+      this.context ??= new window.AudioContext();
+    } catch {
+      return undefined;
+    }
     return this.context;
   }
 }
