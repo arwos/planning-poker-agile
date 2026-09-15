@@ -317,9 +317,21 @@
 .vote-feedback--success {
   color: #62f5a5;
 }
+.vote-actions {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+}
+.vote-actions .vote {
+  flex: 1;
+  min-width: 0;
+}
 .voting-block .vote {
   margin: 0;
   min-width: 100%;
+}
+.voting-block .vote-actions .vote {
+  min-width: 0;
 }
 @media (max-width: 940px) {
   .game-layout {
@@ -370,6 +382,9 @@
   .voting-block .cards {
     flex-wrap: nowrap;
     overflow: auto;
+  }
+  .vote-actions {
+    flex-direction: column;
   }
 }
 .gamebar {

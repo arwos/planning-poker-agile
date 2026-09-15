@@ -32,6 +32,68 @@ func TestVotesRevealAfterAllVotersSubmit(t *testing.T) {
 	}
 }
 
+func TestSkipVoteCountsAsSubmittedWithoutAffectingResults(t *testing.T) {
+	r, err := New([]float64{1, 3, 5}, []string{"Backend", "QA"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	skipped := &Participant{ID: "skipped", Name: "Ann", Role: "Backend"}
+	voter := &Participant{ID: "voter", Name: "Bob", Role: "QA"}
+	if err := r.Add(skipped); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Add(voter); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := r.SkipVote(skipped.ID); err != nil || done {
+		t.Fatalf("skip vote: done=%v err=%v", done, err)
+	}
+	if !skipped.Submitted || !skipped.Skipped || skipped.Selected != nil {
+		t.Fatalf("skip state was not stored: submitted=%v skipped=%v selected=%v", skipped.Submitted, skipped.Skipped, skipped.Selected)
+	}
+	if _, ok := r.Votes[skipped.ID]; ok {
+		t.Fatal("skipped vote must not be included in votes")
+	}
+
+	done, err := r.Vote(voter.ID, 5, true)
+	if err != nil || !done {
+		t.Fatalf("final vote: done=%v err=%v", done, err)
+	}
+	if !r.Revealed || r.Average != 5 {
+		t.Fatalf("unexpected results: revealed=%v average=%v", r.Revealed, r.Average)
+	}
+	if _, ok := r.RoleAverages["Backend"]; ok {
+		t.Fatal("skipped role must not have an average")
+	}
+	if r.RoleAverages["QA"] != 5 {
+		t.Fatalf("unexpected role averages: %#v", r.RoleAverages)
+	}
+	state := r.Snapshot()
+	if state["hasVotes"] != true {
+		t.Fatal("results should report that at least one vote was counted")
+	}
+}
+
+func TestAllParticipantsCanSkipVote(t *testing.T) {
+	r, err := New([]float64{1, 3, 5}, []string{"Backend"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := &Participant{ID: "first", Name: "Ann", Role: "Backend"}
+	second := &Participant{ID: "second", Name: "Bob", Role: "Backend"}
+	_ = r.Add(first)
+	_ = r.Add(second)
+	if done, err := r.SkipVote(first.ID); err != nil || done {
+		t.Fatalf("first skip: done=%v err=%v", done, err)
+	}
+	if done, err := r.SkipVote(second.ID); err != nil || !done {
+		t.Fatalf("second skip: done=%v err=%v", done, err)
+	}
+	if !r.Revealed || len(r.Votes) != 0 || r.Snapshot()["hasVotes"] != false {
+		t.Fatalf("all-skipped round has unexpected state: revealed=%v votes=%d state=%#v", r.Revealed, len(r.Votes), r.Snapshot())
+	}
+}
+
 func TestSubmittedVoteCanBeChangedBeforeReveal(t *testing.T) {
 	r, err := New([]float64{1, 3, 5}, []string{"Backend"})
 	if err != nil {
@@ -84,6 +146,9 @@ func TestOnlyLeadCanReset(t *testing.T) {
 	}
 	if r.Revealed || len(r.Votes) != 0 {
 		t.Fatal("reset did not clear round")
+	}
+	if lead.Skipped || guest.Skipped {
+		t.Fatal("reset did not clear skipped state")
 	}
 }
 

@@ -162,7 +162,11 @@
                 >{{ person.lead ? "Lead · " : ""
                 }}{{ person.role || "Observer" }}</small
               ><span class="status">{{
-                person.submitted ? "Voted" : "Thinking"
+                person.skipped
+                  ? "Skipped"
+                  : person.submitted
+                    ? "Voted"
+                    : "Thinking"
               }}</span>
               @if (room()?.revealed && person.vote !== undefined) {
                 <strong class="revealed">{{ person.vote }}</strong>
@@ -176,7 +180,9 @@
               <div class="average group-average total-average">
                 <span>Average</span
                 ><strong>{{
-                  room()?.revealed ? (room()?.average | number: "1.1-1") : "—"
+                  room()?.revealed && room()?.hasVotes
+                    ? (room()?.average | number: "1.1-1")
+                    : "—"
                 }}</strong>
               </div>
               <div class="role-results">
@@ -214,7 +220,9 @@
                     [class.selected]="selected === card"
                     [attr.aria-pressed]="selected === card"
                     [disabled]="
-                      room()?.revealed || voteStatus() === 'sending'
+                      room()?.revealed ||
+                      voteStatus() === 'sending' ||
+                      voteStatus() === 'skipping'
                     "
                     (click)="selectCard(card)"
                   >
@@ -226,6 +234,14 @@
                 <p class="vote-feedback vote-feedback--pending" role="status">
                   Sending your vote…
                 </p>
+              } @else if (voteStatus() === "skipping") {
+                <p class="vote-feedback vote-feedback--pending" role="status">
+                  Skipping this voting…
+                </p>
+              } @else if (voteStatus() === "skipped") {
+                <p class="vote-feedback vote-feedback--success" role="status">
+                  Voting skipped ✓ Your vote is not included.
+                </p>
               } @else if (voteStatus() === "confirmed") {
                 <p class="vote-feedback vote-feedback--success" role="status">
                   Vote submitted ✓ Choose another card to change it.
@@ -233,23 +249,41 @@
               } @else {
                 <p class="vote-feedback" aria-hidden="true"></p>
               }
-              <button
-                class="primary vote"
-                [disabled]="
-                  selected === undefined ||
-                  room()?.revealed ||
-                  voteStatus() !== 'idle'
-                "
-                (click)="vote()"
-              >
-                @if (voteStatus() === "sending") {
-                  Sending…
-                } @else if (voteStatus() === "confirmed") {
-                  Vote submitted ✓
-                } @else {
-                  {{ me()?.submitted ? "Submit new vote" : "Submit vote" }}
-                }
-              </button>
+              <div class="vote-actions">
+                <button
+                  class="primary vote"
+                  [disabled]="
+                    selected === undefined ||
+                    room()?.revealed ||
+                    voteStatus() !== 'idle'
+                  "
+                  (click)="vote()"
+                >
+                  @if (voteStatus() === "sending") {
+                    Sending…
+                  } @else if (voteStatus() === "confirmed") {
+                    Vote submitted ✓
+                  } @else {
+                    {{ me()?.submitted ? "Submit new vote" : "Submit vote" }}
+                  }
+                </button>
+                <button
+                  class="primary vote"
+                  type="button"
+                  [disabled]="
+                    room()?.revealed || voteStatus() !== 'idle'
+                  "
+                  (click)="skipVote()"
+                >
+                  @if (voteStatus() === "skipping") {
+                    Skipping…
+                  } @else if (voteStatus() === "skipped") {
+                    Skipped ✓
+                  } @else {
+                    Skip voting
+                  }
+                </button>
+              </div>
             </section>
           }
           @if (error()) {

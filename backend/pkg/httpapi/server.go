@@ -131,6 +131,10 @@ func (m incomingMessage) validate(first bool) error {
 		if m.nameSet || m.roleSet || m.clientIDSet || m.ownerTokenSet {
 			return errors.New("unexpected vote fields")
 		}
+	case "vote_skipped":
+		if m.nameSet || m.roleSet || m.clientIDSet || m.ownerTokenSet || m.valueSet {
+			return errors.New("vote_skipped does not accept fields")
+		}
 	case "reset":
 		if m.nameSet || m.roleSet || m.clientIDSet || m.ownerTokenSet || m.valueSet {
 			return errors.New("reset does not accept fields")
@@ -400,6 +404,15 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 					}
 					s.broadcast(id, map[string]any{"type": typ, "state": rm.Snapshot()})
 				}
+			}
+		case "vote_skipped":
+			done, e := rm.SkipVote(p.ID)
+			if e == nil {
+				typ := "room_state"
+				if done {
+					typ = "results_revealed"
+				}
+				s.broadcast(id, map[string]any{"type": typ, "state": rm.Snapshot()})
 			}
 		case "reset":
 			if rm.Reset(p.ID) == nil {

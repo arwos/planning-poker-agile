@@ -80,6 +80,8 @@ Set any room limit to `0` to disable that limit.
 | `GET` | `/ws/rooms/{id}` | Opens a room WebSocket; first message must be `join` with `name`, `role`, and a stable private `client_id`; the creator also sends `owner_token`. |
 | `GET` | `/healthz` | Liveness endpoint. |
 
+WebSocket client events include `join`, `vote_selected`, `vote_submitted`, `vote_skipped`, and `reset`. `vote_skipped` marks a voter as submitted without adding a value to the results.
+
 Only selected votes are private. Submitted votes become visible after the server reveals results. Room pages send `X-Robots-Tag: noindex` and are excluded from `robots.txt`.
 
 ## Development commands

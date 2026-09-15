@@ -10,7 +10,7 @@ import { SoundService } from "./services/sound.service";
 
 type RoomSettings = { cards: number[]; roles: string[] };
 type ReconnectStatus = "idle" | "waiting" | "attempting";
-type VoteStatus = "idle" | "sending" | "confirmed";
+type VoteStatus = "idle" | "sending" | "confirmed" | "skipping" | "skipped";
 const defaultCards = [0, 0.5, 1, 2, 3, 5, 8];
 const defaultRoles = ["Backend", "Frontend", "QA", "Analytic"];
 const roomSettingsKey = "planning-poker.room-settings";
@@ -133,6 +133,7 @@ export class AppComponent {
     }
   }
   join(): void {
+    this.sounds.enable();
     this.connect();
   }
   private connect(isReconnect = false): void {
@@ -170,7 +171,12 @@ export class AppComponent {
     socket.onclose = (): void => {
       if (this.socket !== socket) return;
       this.socket = undefined;
-      if (this.voteStatus() === "sending") this.voteStatus.set("idle");
+      if (
+        this.voteStatus() === "sending" ||
+        this.voteStatus() === "skipping"
+      ) {
+        this.voteStatus.set("idle");
+      }
       if (!this.connectionRejected) this.reconnect();
     };
   }
@@ -195,8 +201,20 @@ export class AppComponent {
       const self = event.state.participants.find(
         (participant): boolean => participant.id === this.selfId,
       );
-      if (this.voteStatus() === "sending" && self?.submitted)
+      if (
+        this.voteStatus() === "skipping" &&
+        self?.submitted &&
+        self.skipped
+      ) {
+        this.selected = undefined;
+        this.voteStatus.set("skipped");
+      } else if (
+        this.voteStatus() === "sending" &&
+        self?.submitted &&
+        !self.skipped
+      ) {
         this.voteStatus.set("confirmed");
+      }
       this.room.set(event.state);
       if (event.self) this.selfId = event.self;
       this.mode.set("game");
@@ -258,14 +276,32 @@ export class AppComponent {
     localStorage.setItem(lastRoleKey, role);
   }
   selectCard(card: number): void {
-    if (this.voteStatus() === "sending") return;
+    if (
+      this.voteStatus() === "sending" ||
+      this.voteStatus() === "skipping"
+    ) {
+      return;
+    }
     this.selected = card;
-    if (this.voteStatus() === "confirmed") this.voteStatus.set("idle");
+    if (
+      this.voteStatus() === "confirmed" ||
+      this.voteStatus() === "skipped"
+    ) {
+      this.voteStatus.set("idle");
+    }
   }
   vote(): void {
     if (this.selected === undefined || this.voteStatus() !== "idle") return;
     this.voteStatus.set("sending");
     if (!this.send("vote_submitted", { value: this.selected })) {
+      this.voteStatus.set("idle");
+      this.error.set("Connection to the room failed.");
+    }
+  }
+  skipVote(): void {
+    if (this.voteStatus() !== "idle") return;
+    this.voteStatus.set("skipping");
+    if (!this.send("vote_skipped", {})) {
       this.voteStatus.set("idle");
       this.error.set("Connection to the room failed.");
     }

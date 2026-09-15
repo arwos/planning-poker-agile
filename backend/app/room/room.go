@@ -30,11 +30,11 @@ const (
 )
 
 type Participant struct {
-	ID, Name, Role  string
-	Lead, Submitted bool
-	Selected        *float64
-	clientID        string
-	connectionID    string
+	ID, Name, Role           string
+	Lead, Submitted, Skipped bool
+	Selected                 *float64
+	clientID                 string
+	connectionID             string
 }
 type Room struct {
 	mu                 sync.RWMutex
@@ -133,10 +133,12 @@ func (r *Room) AddConnection(p *Participant, clientID, ownerToken, connectionID 
 			p.Lead = existing.Lead
 			if p.Role == existing.Role {
 				p.Submitted = existing.Submitted
+				p.Skipped = existing.Skipped
 				p.Selected = existing.Selected
 			} else {
 				delete(r.Votes, id)
 				p.Submitted = false
+				p.Skipped = false
 				p.Selected = nil
 			}
 			p.clientID = clientID
@@ -155,10 +157,12 @@ func (r *Room) AddConnection(p *Participant, clientID, ownerToken, connectionID 
 			p.Lead = existing.Lead
 			if p.Role == existing.Role {
 				p.Submitted = existing.Submitted
+				p.Skipped = existing.Skipped
 				p.Selected = existing.Selected
 			} else {
 				delete(r.Votes, p.ID)
 				p.Submitted = false
+				p.Skipped = false
 				p.Selected = nil
 			}
 			p.clientID = clientID
@@ -248,33 +252,62 @@ func (r *Room) Vote(id string, value float64, submit bool) (bool, error) {
 		return false, ErrInvalid
 	}
 	p.Selected = &value
+	p.Skipped = false
 	if submit {
 		p.Submitted = true
 		r.Votes[id] = value
+	} else {
+		p.Submitted = false
+		delete(r.Votes, id)
 	}
-	complete := len(r.Votes) > 0
-	for _, x := range r.Participants {
-		if x.Role != "" && !x.Submitted {
-			complete = false
+	return r.revealIfCompleteLocked(), nil
+}
+
+func (r *Room) SkipVote(id string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	p, ok := r.Participants[id]
+	if !ok || p.Role == "" || r.Revealed {
+		return false, ErrInvalid
+	}
+	p.Selected = nil
+	p.Submitted = true
+	p.Skipped = true
+	delete(r.Votes, id)
+	return r.revealIfCompleteLocked(), nil
+}
+
+func (r *Room) revealIfCompleteLocked() bool {
+	hasVoter := false
+	for _, participant := range r.Participants {
+		if participant.Role == "" {
+			continue
+		}
+		hasVoter = true
+		if !participant.Submitted {
+			return false
 		}
 	}
-	if complete {
-		r.Revealed = true
-		vals := []float64{}
-		byRole := map[string][]float64{}
-		for _, v := range r.Votes {
-			vals = append(vals, v)
-		}
-		for participantID, vote := range r.Votes {
-			byRole[r.Participants[participantID].Role] = append(byRole[r.Participants[participantID].Role], vote)
-		}
-		r.Average = voting.Average(vals)
-		r.RoleAverages = map[string]float64{}
-		for role, values := range byRole {
-			r.RoleAverages[role] = voting.Average(values)
-		}
+	if !hasVoter {
+		return false
 	}
-	return complete, nil
+	r.Revealed = true
+	vals := make([]float64, 0, len(r.Votes))
+	byRole := map[string][]float64{}
+	for participantID, vote := range r.Votes {
+		participant := r.Participants[participantID]
+		if participant == nil {
+			continue
+		}
+		vals = append(vals, vote)
+		byRole[participant.Role] = append(byRole[participant.Role], vote)
+	}
+	r.Average = voting.Average(vals)
+	r.RoleAverages = map[string]float64{}
+	for role, values := range byRole {
+		r.RoleAverages[role] = voting.Average(values)
+	}
+	return true
 }
 func (r *Room) Reset(id string) error {
 	r.mu.Lock()
@@ -289,6 +322,7 @@ func (r *Room) Reset(id string) error {
 	r.RoleAverages = map[string]float64{}
 	for _, x := range r.Participants {
 		x.Submitted = false
+		x.Skipped = false
 		x.Selected = nil
 	}
 	return nil
@@ -298,13 +332,13 @@ func (r *Room) Snapshot() map[string]any {
 	defer r.mu.RUnlock()
 	ps := []map[string]any{}
 	for _, p := range r.Participants {
-		m := map[string]any{"id": p.ID, "name": p.Name, "role": p.Role, "lead": p.Lead, "submitted": p.Submitted}
+		m := map[string]any{"id": p.ID, "name": p.Name, "role": p.Role, "lead": p.Lead, "submitted": p.Submitted, "skipped": p.Skipped}
 		if r.Revealed && p.Selected != nil {
 			m["vote"] = *p.Selected
 		}
 		ps = append(ps, m)
 	}
-	return map[string]any{"id": r.ID, "cards": r.Cards, "roles": r.Roles, "participants": ps, "revealed": r.Revealed, "average": r.Average, "roleAverages": r.RoleAverages}
+	return map[string]any{"id": r.ID, "cards": r.Cards, "roles": r.Roles, "participants": ps, "revealed": r.Revealed, "average": r.Average, "hasVotes": len(r.Votes) > 0, "roleAverages": r.RoleAverages}
 }
 func (r *Room) String() string { return fmt.Sprintf("room %s", r.ID) }
 

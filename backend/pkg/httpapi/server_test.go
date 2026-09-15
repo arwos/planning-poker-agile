@@ -187,9 +187,11 @@ func TestIncomingMessageValidation(t *testing.T) {
 		{name: "unknown type", body: `{"type":"unknown"}`, first: false},
 		{name: "vote without value", body: `{"type":"vote_submitted"}`, first: false},
 		{name: "vote with unexpected field", body: `{"type":"vote_submitted","value":1,"name":"Ann"}`, first: false},
+		{name: "skip with unexpected field", body: `{"type":"vote_skipped","value":1}`, first: false},
 		{name: "reset with owner token", body: `{"type":"reset","owner_token":"owner-1"}`, first: false},
 		{name: "reset with value", body: `{"type":"reset","value":1}`, first: false},
 		{name: "valid vote", body: `{"type":"vote_selected","value":2}`, first: false, valid: true},
+		{name: "valid skip", body: `{"type":"vote_skipped"}`, first: false, valid: true},
 		{name: "valid reset", body: `{"type":"reset"}`, first: false, valid: true},
 	}
 	for _, tt := range tests {
