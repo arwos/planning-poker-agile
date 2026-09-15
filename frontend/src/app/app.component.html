@@ -11,6 +11,34 @@
       </button>
     }
   </header>
+  @if (reconnectStatus() !== "idle") {
+    <section
+      class="connection-status"
+      [class.connection-status--attempting]="reconnectStatus() === 'attempting'"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >
+      <span class="connection-status__indicator" aria-hidden="true"></span>
+      @if (reconnectStatus() === "waiting") {
+        <div class="connection-status__copy">
+          <strong>Connection interrupted</strong>
+          <span
+            >Reconnecting in
+            <b class="connection-status__countdown"
+              >{{ reconnectSeconds() }}</b
+            >
+            seconds…</span
+          >
+        </div>
+      } @else {
+        <div class="connection-status__copy">
+          <strong>Trying to reconnect…</strong>
+          <span>Checking the room and opening a new connection.</span>
+        </div>
+      }
+    </section>
+  }
   @if (mode() === "create") {
     <section class="hero">
       <p class="eyebrow">Insert coin · Estimate together</p>
@@ -49,20 +77,6 @@
           Create a room <span>↗</span>
         </button>
       </div>
-      @if (link()) {
-        <div class="result">
-          <strong>Your room is ready</strong><code>{{ link() }}</code
-          ><button type="button" (click)="copy(link())">
-            {{
-              copyStatus() === "success"
-                ? "Copied!"
-                : copyStatus() === "error"
-                  ? "Copy failed"
-                  : "Copy link"
-            }}</button
-          ><a [href]="link()">Enter room</a>
-        </div>
-      }
       @if (error()) {
         <p class="error" role="alert">{{ error() }}</p>
       }
@@ -148,7 +162,11 @@
                 >{{ person.lead ? "Lead · " : ""
                 }}{{ person.role || "Observer" }}</small
               ><span class="status">{{
-                person.submitted ? "Voted" : "Thinking"
+                person.skipped
+                  ? "Skipped"
+                  : person.submitted
+                    ? "Voted"
+                    : "Thinking"
               }}</span>
               @if (room()?.revealed && person.vote !== undefined) {
                 <strong class="revealed">{{ person.vote }}</strong>
@@ -162,7 +180,9 @@
               <div class="average group-average total-average">
                 <span>Average</span
                 ><strong>{{
-                  room()?.revealed ? (room()?.average | number: "1.1-1") : "—"
+                  room()?.revealed && room()?.hasVotes
+                    ? (room()?.average | number: "1.1-1")
+                    : "—"
                 }}</strong>
               </div>
               <div class="role-results">
@@ -199,22 +219,71 @@
                   <button
                     [class.selected]="selected === card"
                     [attr.aria-pressed]="selected === card"
-                    [disabled]="me()?.submitted || room()?.revealed"
-                    (click)="selected = card"
+                    [disabled]="
+                      room()?.revealed ||
+                      voteStatus() === 'sending' ||
+                      voteStatus() === 'skipping'
+                    "
+                    (click)="selectCard(card)"
                   >
                     {{ card }}
                   </button>
                 }
               </div>
-              <button
-                class="primary vote"
-                [disabled]="
-                  selected === undefined || me()?.submitted || room()?.revealed
-                "
-                (click)="vote()"
-              >
-                {{ me()?.submitted ? "Vote submitted" : "Submit vote" }}
-              </button>
+              @if (voteStatus() === "sending") {
+                <p class="vote-feedback vote-feedback--pending" role="status">
+                  Sending your vote…
+                </p>
+              } @else if (voteStatus() === "skipping") {
+                <p class="vote-feedback vote-feedback--pending" role="status">
+                  Skipping this voting…
+                </p>
+              } @else if (voteStatus() === "skipped") {
+                <p class="vote-feedback vote-feedback--success" role="status">
+                  Voting skipped ✓ Your vote is not included.
+                </p>
+              } @else if (voteStatus() === "confirmed") {
+                <p class="vote-feedback vote-feedback--success" role="status">
+                  Vote submitted ✓ Choose another card to change it.
+                </p>
+              } @else {
+                <p class="vote-feedback" aria-hidden="true"></p>
+              }
+              <div class="vote-actions">
+                <button
+                  class="primary vote vote-skip"
+                  type="button"
+                  [disabled]="
+                    room()?.revealed || voteStatus() !== 'idle'
+                  "
+                  (click)="skipVote()"
+                >
+                  @if (voteStatus() === "skipping") {
+                    Skipping…
+                  } @else if (voteStatus() === "skipped") {
+                    Skipped ✓
+                  } @else {
+                    Skip voting
+                  }
+                </button>
+                <button
+                  class="primary vote"
+                  [disabled]="
+                    selected === undefined ||
+                    room()?.revealed ||
+                    voteStatus() !== 'idle'
+                  "
+                  (click)="vote()"
+                >
+                  @if (voteStatus() === "sending") {
+                    Sending…
+                  } @else if (voteStatus() === "confirmed") {
+                    Vote submitted ✓
+                  } @else {
+                    {{ me()?.submitted ? "Submit new vote" : "Submit vote" }}
+                  }
+                </button>
+              </div>
             </section>
           }
           @if (error()) {
@@ -227,4 +296,56 @@
   <footer>
     © <a href="https://osspkg.com/" target="_blank" class="nolink">The OSSPkg Team</a> 2026 - Now · NO TOKENS REQUIRED
   </footer>
+  @if (link()) {
+    <div class="room-modal-backdrop">
+      <section
+        class="room-dialog room-ready"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="room-ready-title"
+        aria-describedby="room-ready-link"
+      >
+        <h2 id="room-ready-title">Your room is ready</h2>
+        <code id="room-ready-link">{{ link() }}</code>
+        <div class="room-ready__actions">
+          <button
+            class="room-ready__copy"
+            type="button"
+            autofocus
+            (click)="copy(link())"
+          >
+            {{
+              copyStatus() === "success"
+                ? "Copied!"
+                : copyStatus() === "error"
+                  ? "Copy failed"
+                  : "Copy link"
+            }}
+          </button>
+          <a class="primary room-ready__enter" [href]="link()"
+            >Enter room</a
+          >
+        </div>
+      </section>
+    </div>
+  }
+  @if (roomUnavailable()) {
+    <div class="room-modal-backdrop">
+      <section
+        class="room-dialog room-unavailable"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="room-unavailable-title"
+        aria-describedby="room-unavailable-message"
+      >
+        <h2 id="room-unavailable-title">Room unavailable</h2>
+        <p id="room-unavailable-message">
+          This room is unavailable or has expired.
+        </p>
+        <button class="primary" type="button" autofocus (click)="leave()">
+          Leave room
+        </button>
+      </section>
+    </div>
+  }
 </main>

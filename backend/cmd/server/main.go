@@ -34,12 +34,32 @@ func main() {
 	if e != nil {
 		log.Fatal(e)
 	}
+	pendingRoomTTL, e := c.PendingRoomTTL()
+	if e != nil {
+		log.Fatal(e)
+	}
+	joinTimeout, e := c.JoinTimeout()
+	if e != nil {
+		log.Fatal(e)
+	}
+	websocketWriteTimeout, e := c.WebSocketWriteTimeout()
+	if e != nil {
+		log.Fatal(e)
+	}
 	s := &httpapi.Server{
-		Registry:        room.NewRegistry(c.Rooms.MaxConcurrent, c.Rooms.MaxRoles, c.Rooms.MaxStoryPoints),
+		Registry:        room.NewRegistry(c.Rooms.MaxConcurrent, c.Rooms.MaxRoles, c.Rooms.MaxStoryPoints, c.Rooms.MaxParticipants),
 		Hub:             realtime.NewHub(),
 		PingInterval:    pingInterval,
 		MaxMessageBytes: c.MaxMessageBytes(),
 		CORSOrigins:     c.CORSOrigins,
+		PendingRoomTTL:  pendingRoomTTL,
+		MaxConnections:  c.WebSocket.MaxConnections,
+		JoinTimeout:     joinTimeout,
+		MessageRate:     c.WebSocket.MessageRatePerSecond,
+		MessageBurst:    c.WebSocket.MessageBurst,
+		OutboundQueue:   c.WebSocket.OutboundQueueSize,
+		WriteTimeout:    websocketWriteTimeout,
+		CreateRate:      c.HTTP.CreateRatePerMinute,
 	}
 	addr := fmt.Sprintf("%s:%d", c.HTTP.Host, c.HTTP.Port)
 	log.Printf("listening on %s", addr)

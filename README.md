@@ -57,28 +57,41 @@ http:
   port: 8080
   read_header_timeout: 5s
   write_timeout: 10s
+  create_rate_per_minute: 10
 rooms:
   max_concurrent: 100
   max_roles: 10
   max_story_points: 10
+  max_participants: 32
+  pending_ttl: 10m
 websocket:
   ping_interval: 1s
   max_message_bytes: 32768
-cors_origins: ["http://localhost:4200"]
+  max_connections: 1000
+  join_timeout: 10s
+  message_rate_per_second: 20
+  message_burst: 40
+  outbound_queue_size: 32
+  write_timeout: 5s
+cors_origins: ["*"]
 ```
 
-Set any room limit to `0` to disable that limit.
+The default `*` allows browser requests from any origin. Override `cors_origins` with an explicit list in production.
+
+Role and story point limits may be set to `0` to disable those individual limits. The concurrent room, participant, and WebSocket connection limits always retain a safe positive default.
 
 ## API
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `POST` | `/api/rooms` | Creates a room from `{ "cards": [...], "roles": [...] }`. |
+| `POST` | `/api/rooms` | Creates a room from `{ "cards": [...], "roles": [...] }`; the response includes a private `owner_token` for the creator. |
 | `GET` | `/api/rooms/{id}` | Returns public room state. |
-| `GET` | `/ws/rooms/{id}` | Opens a room WebSocket; first message must be `join`. |
+| `GET` | `/ws/rooms/{id}` | Opens a room WebSocket; first message must be `join` with `name`, `role`, and a stable private `client_id`; reconnects additionally send the server-issued `reconnect_token`; the creator also sends `owner_token`. |
 | `GET` | `/healthz` | Liveness endpoint. |
 
-Only selected votes are private. Submitted votes become visible after the server reveals results. Room pages send `X-Robots-Tag: noindex` and are excluded from `robots.txt`.
+WebSocket client events include `join`, `vote_selected`, `vote_submitted`, `vote_skipped`, and `reset`. `vote_skipped` marks a voter as submitted without adding a value to the results.
+
+Only selected votes are private. Submitted votes become visible after the server reveals results. Room pages send `X-Robots-Tag: noindex` and are excluded from `robots.txt`. Configure TLS at a reverse proxy before exposing room links or owner tokens outside a trusted network.
 
 ## Development commands
 
@@ -117,4 +130,6 @@ cd frontend && pnpm lint && pnpm build
 
 ## License
 
-No license has been selected yet. Add one before distributing the project publicly.
+This project is licensed under the [GNU General Public License v3.0](LICENSE).
+
+Copyright (c) 2026 Mikhail Knyazhev.

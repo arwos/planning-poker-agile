@@ -4,6 +4,7 @@ export type Participant = {
   role: string;
   lead: boolean;
   submitted: boolean;
+  skipped: boolean;
   vote?: number;
 };
 export type RoomState = {
@@ -13,11 +14,13 @@ export type RoomState = {
   participants: Participant[];
   revealed: boolean;
   average: number;
+  hasVotes: boolean;
   roleAverages: Record<string, number>;
 };
 export type ServerEvent = {
   type: string;
   state?: RoomState;
   self?: string;
+  reconnect_token?: string;
   error?: string;
 };

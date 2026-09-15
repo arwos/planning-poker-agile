@@ -43,8 +43,11 @@ docker-build:
     		--push .
 
 docker-run:
-	docker run --rm --publish 8080:8080 $(IMAGE):$(TAG)
+	docker run --rm --publish 127.0.0.1:8080:8080 $(IMAGE):$(TAG)
 docker-up:
 	docker compose --file docker/docker-compose.yml up --build -d
 docker-down:
 	docker compose --file docker/docker-compose.yml down
+
+license:
+	goppy license
