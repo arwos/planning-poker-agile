@@ -15,6 +15,7 @@ const roomSettingsKey = "planning-poker.room-settings";
 const lastRoleKey = "planning-poker.last-role";
 const reconnectIntervalMs = 5_000;
 const clientIDKeyPrefix = "planning-poker.client-id.";
+const ownerTokenKeyPrefix = "planning-poker.owner-token.";
 
 @Component({
   selector: "app-root",
@@ -97,6 +98,7 @@ export class AppComponent {
         throw new Error("Add at least one story point and one role.");
       this.saveSettings();
       const data = await this.api.create(this.cards, this.roles);
+      localStorage.setItem(`${ownerTokenKeyPrefix}${data.id}`, data.owner_token);
       this.link.set(`${location.origin}${data.url}`);
     } catch (error) {
       this.error.set(
@@ -127,6 +129,7 @@ export class AppComponent {
     this.connectionRejected = false;
     localStorage.setItem("poker-name", this.name.trim());
     const clientID = this.clientID();
+    const ownerToken = this.ownerToken();
     const socket = new WebSocket(this.api.webSocketURL(this.roomId));
     this.socket = socket;
     socket.onopen = (): void => {
@@ -134,7 +137,12 @@ export class AppComponent {
       this.error.set("");
       this.send(
         "join",
-        { name: this.name.trim(), role: this.role, client_id: clientID },
+        {
+          name: this.name.trim(),
+          role: this.role,
+          client_id: clientID,
+          ...(ownerToken ? { owner_token: ownerToken } : {}),
+        },
         socket,
       );
     };
@@ -261,6 +269,9 @@ export class AppComponent {
       `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
     localStorage.setItem(key, clientID);
     return clientID;
+  }
+  private ownerToken(): string {
+    return localStorage.getItem(`${ownerTokenKeyPrefix}${this.roomId}`) ?? "";
   }
   private clearReconnectTimer(): void {
     if (this.reconnectTimer === undefined) return;

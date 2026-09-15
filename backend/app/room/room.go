@@ -6,14 +6,16 @@
 package room
 
 import (
+	"crypto/subtle"
 	"errors"
 	"fmt"
-	"github.com/arwos/planning-poker-agile/app/voting"
-	"github.com/google/uuid"
 	"math"
 	"strings"
 	"sync"
 	"unicode/utf8"
+
+	"github.com/arwos/planning-poker-agile/app/voting"
+	"github.com/google/uuid"
 )
 
 var DefaultCards = []float64{0, .5, 1, 2, 3, 5, 8}
@@ -24,6 +26,7 @@ var ErrCapacity = errors.New("room capacity reached")
 const (
 	maxParticipantNameLength = 40
 	maxRoleNameLength        = 40
+	maxOwnerTokenLength      = 128
 )
 
 type Participant struct {
@@ -34,22 +37,28 @@ type Participant struct {
 	connectionID    string
 }
 type Room struct {
-	mu           sync.RWMutex
-	ID           string
-	Cards        []float64
-	Roles        []string
-	Participants map[string]*Participant
-	Revealed     bool
-	Average      float64
-	RoleAverages map[string]float64
-	Votes        map[string]float64
+	mu                 sync.RWMutex
+	ID                 string
+	Cards              []float64
+	Roles              []string
+	Participants       map[string]*Participant
+	Revealed           bool
+	Average            float64
+	RoleAverages       map[string]float64
+	Votes              map[string]float64
+	ownerToken         string
+	ownerParticipantID string
 }
 
 func New(cards []float64, roles []string) (*Room, error) {
-	return newRoom(cards, roles, 0, 0)
+	return newRoom(cards, roles, 0, 0, "")
 }
 
-func newRoom(cards []float64, roles []string, maxCards, maxRoles int) (*Room, error) {
+func newRoom(cards []float64, roles []string, maxCards, maxRoles int, ownerToken string) (*Room, error) {
+	ownerToken = strings.TrimSpace(ownerToken)
+	if ownerToken != "" && len(ownerToken) > maxOwnerTokenLength {
+		return nil, ErrInvalid
+	}
 	if len(cards) == 0 {
 		cards = append([]float64(nil), DefaultCards...)
 	}
@@ -79,14 +88,22 @@ func newRoom(cards []float64, roles []string, maxCards, maxRoles int) (*Room, er
 	if maxRoles > 0 && len(clean) > maxRoles {
 		return nil, fmt.Errorf("maximum %d roles allowed: %w", maxRoles, ErrInvalid)
 	}
-	return &Room{ID: uuid.NewString(), Cards: cards, Roles: clean, Participants: map[string]*Participant{}, Votes: map[string]float64{}, RoleAverages: map[string]float64{}}, nil
+	return &Room{
+		ID:           uuid.NewString(),
+		Cards:        cards,
+		Roles:        clean,
+		Participants: map[string]*Participant{},
+		Votes:        map[string]float64{},
+		RoleAverages: map[string]float64{},
+		ownerToken:   ownerToken,
+	}, nil
 }
 func (r *Room) Add(p *Participant) error {
-	_, err := r.AddConnection(p, "", "")
+	_, err := r.AddConnection(p, "", "", "")
 	return err
 }
 
-func (r *Room) AddConnection(p *Participant, clientID, connectionID string) (bool, error) {
+func (r *Room) AddConnection(p *Participant, clientID, ownerToken, connectionID string) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if !utf8.ValidString(p.Name) || p.Name == "" || utf8.RuneCountInString(p.Name) > maxParticipantNameLength {
@@ -106,6 +123,7 @@ func (r *Room) AddConnection(p *Participant, clientID, connectionID string) (boo
 			return false, ErrInvalid
 		}
 	}
+	isOwner := r.isOwnerTokenLocked(ownerToken)
 	if clientID != "" {
 		for id, existing := range r.Participants {
 			if existing.clientID != clientID {
@@ -118,10 +136,35 @@ func (r *Room) AddConnection(p *Participant, clientID, connectionID string) (boo
 				p.Selected = existing.Selected
 			} else {
 				delete(r.Votes, id)
+				p.Submitted = false
+				p.Selected = nil
 			}
 			p.clientID = clientID
 			p.connectionID = connectionID
 			r.Participants[id] = p
+			if isOwner {
+				r.ownerParticipantID = id
+				r.promoteLeadLocked(id)
+			}
+			return true, nil
+		}
+	}
+	if isOwner && r.ownerParticipantID != "" {
+		if existing := r.Participants[r.ownerParticipantID]; existing != nil {
+			p.ID = existing.ID
+			p.Lead = existing.Lead
+			if p.Role == existing.Role {
+				p.Submitted = existing.Submitted
+				p.Selected = existing.Selected
+			} else {
+				delete(r.Votes, p.ID)
+				p.Submitted = false
+				p.Selected = nil
+			}
+			p.clientID = clientID
+			p.connectionID = connectionID
+			r.Participants[p.ID] = p
+			r.promoteLeadLocked(p.ID)
 			return true, nil
 		}
 	}
@@ -131,7 +174,21 @@ func (r *Room) AddConnection(p *Participant, clientID, connectionID string) (boo
 	p.clientID = clientID
 	p.connectionID = connectionID
 	r.Participants[p.ID] = p
+	if isOwner {
+		r.ownerParticipantID = p.ID
+		r.promoteLeadLocked(p.ID)
+	}
 	return false, nil
+}
+
+func (r *Room) isOwnerTokenLocked(ownerToken string) bool {
+	return ownerToken != "" && r.ownerToken != "" && subtle.ConstantTimeCompare([]byte(ownerToken), []byte(r.ownerToken)) == 1
+}
+
+func (r *Room) promoteLeadLocked(id string) {
+	for participantID, participant := range r.Participants {
+		participant.Lead = participantID == id
+	}
 }
 
 func (r *Room) Remove(id string) bool {
@@ -270,7 +327,15 @@ func NewRegistry(maxRooms int, limits ...int) *Registry {
 	return registry
 }
 func (x *Registry) Create(c []float64, roles []string) (*Room, error) {
-	r, e := newRoom(c, roles, x.maxCards, x.maxRoles)
+	return x.create(c, roles, "")
+}
+
+func (x *Registry) CreateWithOwner(c []float64, roles []string, ownerToken string) (*Room, error) {
+	return x.create(c, roles, ownerToken)
+}
+
+func (x *Registry) create(c []float64, roles []string, ownerToken string) (*Room, error) {
+	r, e := newRoom(c, roles, x.maxCards, x.maxRoles, ownerToken)
 	if e == nil {
 		x.mu.Lock()
 		if x.maxRooms > 0 && len(x.rooms) >= x.maxRooms {

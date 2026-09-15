@@ -1,6 +1,12 @@
 import { Injectable } from "@angular/core";
 import { RoomState } from "../models/room";
 
+export type CreatedRoom = {
+  id: string;
+  url: string;
+  owner_token: string;
+};
+
 const apiBase =
   location.port === "4200" ? "http://localhost:8080" : location.origin;
 
@@ -16,7 +22,7 @@ export class RoomApiService {
   async create(
     cards: number[],
     roles: string[],
-  ): Promise<{ id: string; url: string }> {
+  ): Promise<CreatedRoom> {
     const response = await fetch(`${apiBase}/api/rooms`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

@@ -68,11 +68,11 @@ func TestLeadTransfersWhenLeadLeaves(t *testing.T) {
 func TestReconnectReplacesParticipantAndProtectsNewConnection(t *testing.T) {
 	r, _ := New(nil, []string{"Backend"})
 	first := &Participant{ID: "first", Name: "Ann", Role: "Backend"}
-	if replaced, err := r.AddConnection(first, "client", "connection-1"); err != nil || replaced {
+	if replaced, err := r.AddConnection(first, "client", "", "connection-1"); err != nil || replaced {
 		t.Fatalf("first connection: replaced=%v err=%v", replaced, err)
 	}
 	second := &Participant{ID: "second", Name: "Ann", Role: "Backend"}
-	if replaced, err := r.AddConnection(second, "client", "connection-2"); err != nil || !replaced {
+	if replaced, err := r.AddConnection(second, "client", "", "connection-2"); err != nil || !replaced {
 		t.Fatalf("reconnect: replaced=%v err=%v", replaced, err)
 	}
 	if second.ID != first.ID {
@@ -86,6 +86,42 @@ func TestReconnectReplacesParticipantAndProtectsNewConnection(t *testing.T) {
 	}
 	if !r.RemoveConnection(second.ID, "connection-2") {
 		t.Fatal("active connection was not removed")
+	}
+}
+
+func TestRoomOwnerRegainsLeadAfterReturning(t *testing.T) {
+	r, err := newRoom(nil, []string{"Backend"}, 0, 0, "owner-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guest := &Participant{ID: "guest", Name: "Guest", Role: "Backend"}
+	if replaced, err := r.AddConnection(guest, "guest-client", "", "guest-1"); err != nil || replaced {
+		t.Fatalf("guest connection: replaced=%v err=%v", replaced, err)
+	}
+	if !guest.Lead {
+		t.Fatal("first participant should temporarily be lead")
+	}
+
+	owner := &Participant{ID: "owner", Name: "Owner", Role: "Backend"}
+	if replaced, err := r.AddConnection(owner, "owner-client", "owner-token", "owner-1"); err != nil || replaced {
+		t.Fatalf("owner connection: replaced=%v err=%v", replaced, err)
+	}
+	if !owner.Lead || guest.Lead {
+		t.Fatal("owner should become lead when joining")
+	}
+	if !r.RemoveConnection(owner.ID, "owner-1") {
+		t.Fatal("owner connection was not removed")
+	}
+	if !guest.Lead {
+		t.Fatal("lead should transfer after owner leaves")
+	}
+
+	returningOwner := &Participant{ID: "owner-return", Name: "Owner", Role: "Backend"}
+	if replaced, err := r.AddConnection(returningOwner, "owner-client", "owner-token", "owner-2"); err != nil || replaced {
+		t.Fatalf("owner return: replaced=%v err=%v", replaced, err)
+	}
+	if !returningOwner.Lead || guest.Lead {
+		t.Fatal("returning owner should regain lead")
 	}
 }
 

@@ -47,17 +47,19 @@ type message struct {
 }
 
 type incomingMessage struct {
-	Type     string   `json:"type"`
-	Name     *string  `json:"name"`
-	Role     *string  `json:"role"`
-	ClientID *string  `json:"client_id"`
-	Value    *float64 `json:"value"`
+	Type       string   `json:"type"`
+	Name       *string  `json:"name"`
+	Role       *string  `json:"role"`
+	ClientID   *string  `json:"client_id"`
+	OwnerToken *string  `json:"owner_token"`
+	Value      *float64 `json:"value"`
 
-	decodeFailed bool
-	nameSet      bool
-	roleSet      bool
-	clientIDSet  bool
-	valueSet     bool
+	decodeFailed  bool
+	nameSet       bool
+	roleSet       bool
+	clientIDSet   bool
+	ownerTokenSet bool
+	valueSet      bool
 }
 
 func (m *incomingMessage) UnmarshalJSON(data []byte) error {
@@ -84,6 +86,7 @@ func (m *incomingMessage) UnmarshalJSON(data []byte) error {
 	_, m.nameSet = fields["name"]
 	_, m.roleSet = fields["role"]
 	_, m.clientIDSet = fields["client_id"]
+	_, m.ownerTokenSet = fields["owner_token"]
 	_, m.valueSet = fields["value"]
 	return nil
 }
@@ -91,6 +94,9 @@ func (m *incomingMessage) UnmarshalJSON(data []byte) error {
 func (m incomingMessage) validate(first bool) error {
 	if m.decodeFailed {
 		return errors.New("invalid message")
+	}
+	if m.nameSet != (m.Name != nil) || m.roleSet != (m.Role != nil) || m.clientIDSet != (m.ClientID != nil) || m.ownerTokenSet != (m.OwnerToken != nil) || m.valueSet != (m.Value != nil) {
+		return errors.New("invalid message fields")
 	}
 	if m.Type == "" {
 		return errors.New("message type is required")
@@ -106,7 +112,7 @@ func (m incomingMessage) validate(first bool) error {
 		if m.Name == nil || strings.TrimSpace(*m.Name) == "" || !m.nameSet {
 			return errors.New("name is required")
 		}
-		if (m.roleSet && m.Role == nil) || (m.clientIDSet && m.ClientID == nil) {
+		if (m.roleSet && m.Role == nil) || (m.clientIDSet && m.ClientID == nil) || (m.ownerTokenSet && m.OwnerToken == nil) {
 			return errors.New("invalid join fields")
 		}
 		if m.valueSet {
@@ -115,15 +121,18 @@ func (m incomingMessage) validate(first bool) error {
 		if m.ClientID != nil && len(strings.TrimSpace(*m.ClientID)) > 128 {
 			return errors.New("client_id is too long")
 		}
+		if m.OwnerToken != nil && (strings.TrimSpace(*m.OwnerToken) == "" || len(strings.TrimSpace(*m.OwnerToken)) > 128) {
+			return errors.New("invalid owner_token")
+		}
 	case "vote_selected", "vote_submitted":
 		if !m.valueSet || m.Value == nil || math.IsNaN(*m.Value) || math.IsInf(*m.Value, 0) {
 			return errors.New("finite value is required")
 		}
-		if m.nameSet || m.roleSet || m.clientIDSet {
+		if m.nameSet || m.roleSet || m.clientIDSet || m.ownerTokenSet {
 			return errors.New("unexpected vote fields")
 		}
 	case "reset":
-		if m.nameSet || m.roleSet || m.clientIDSet || m.valueSet {
+		if m.nameSet || m.roleSet || m.clientIDSet || m.ownerTokenSet || m.valueSet {
 			return errors.New("reset does not accept fields")
 		}
 	default:
@@ -260,7 +269,8 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cards and roles are required", http.StatusBadRequest)
 		return
 	}
-	x, e := s.Registry.Create(*in.Cards, *in.Roles)
+	ownerToken := uuid.NewString()
+	x, e := s.Registry.CreateWithOwner(*in.Cards, *in.Roles, ownerToken)
 	if e != nil {
 		if errors.Is(e, room.ErrCapacity) {
 			http.Error(w, e.Error(), http.StatusTooManyRequests)
@@ -270,7 +280,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"id": x.ID, "url": "/room/" + x.ID})
+	json.NewEncoder(w).Encode(map[string]string{"id": x.ID, "url": "/room/" + x.ID, "owner_token": ownerToken})
 }
 
 func (s *Server) decodeJSONBody(w http.ResponseWriter, r *http.Request, target any) error {
@@ -330,9 +340,13 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 	if len(clientID) > 128 {
 		clientID = ""
 	}
+	ownerToken := ""
+	if in.OwnerToken != nil {
+		ownerToken = strings.TrimSpace(*in.OwnerToken)
+	}
 	connectionID := uuid.NewString()
 	p := &room.Participant{ID: uuid.NewString(), Name: name, Role: role}
-	reconnected, e := rm.AddConnection(p, clientID, connectionID)
+	reconnected, e := rm.AddConnection(p, clientID, ownerToken, connectionID)
 	if e != nil {
 		_ = wsjson.Write(connectionCtx, c, message{Type: "error", Error: "name or role is invalid"})
 		return

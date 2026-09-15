@@ -32,6 +32,13 @@ func TestCreateAndReadRoom(t *testing.T) {
 	if len(created.Body.Bytes()) == 0 {
 		t.Fatal("expected create body")
 	}
+	var createdRoom map[string]string
+	if err := json.Unmarshal(created.Body.Bytes(), &createdRoom); err != nil {
+		t.Fatal(err)
+	}
+	if createdRoom["owner_token"] == "" {
+		t.Fatal("expected owner token")
+	}
 }
 
 func TestWebSocketJoinAndReveal(t *testing.T) {
@@ -174,12 +181,13 @@ func TestIncomingMessageValidation(t *testing.T) {
 		first bool
 		valid bool
 	}{
-		{name: "valid join", body: `{"type":"join","name":"Ann","role":"Backend","client_id":"client-1"}`, first: true, valid: true},
+		{name: "valid join", body: `{"type":"join","name":"Ann","role":"Backend","client_id":"client-1","owner_token":"owner-1"}`, first: true, valid: true},
 		{name: "unknown field", body: `{"type":"join","name":"Ann","extra":true}`, first: true},
 		{name: "missing name", body: `{"type":"join","role":"Backend"}`, first: true},
 		{name: "unknown type", body: `{"type":"unknown"}`, first: false},
 		{name: "vote without value", body: `{"type":"vote_submitted"}`, first: false},
 		{name: "vote with unexpected field", body: `{"type":"vote_submitted","value":1,"name":"Ann"}`, first: false},
+		{name: "reset with owner token", body: `{"type":"reset","owner_token":"owner-1"}`, first: false},
 		{name: "reset with value", body: `{"type":"reset","value":1}`, first: false},
 		{name: "valid vote", body: `{"type":"vote_selected","value":2}`, first: false, valid: true},
 		{name: "valid reset", body: `{"type":"reset"}`, first: false, valid: true},
