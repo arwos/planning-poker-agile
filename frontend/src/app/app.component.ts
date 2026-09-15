@@ -14,6 +14,7 @@ const defaultRoles = ["Backend", "Frontend", "QA", "Analytic"];
 const roomSettingsKey = "planning-poker.room-settings";
 const lastRoleKey = "planning-poker.last-role";
 const reconnectIntervalMs = 5_000;
+const clientIDKeyPrefix = "planning-poker.client-id.";
 
 @Component({
   selector: "app-root",
@@ -125,12 +126,17 @@ export class AppComponent {
     this.leaving = false;
     this.connectionRejected = false;
     localStorage.setItem("poker-name", this.name.trim());
+    const clientID = this.clientID();
     const socket = new WebSocket(this.api.webSocketURL(this.roomId));
     this.socket = socket;
     socket.onopen = (): void => {
       if (this.socket !== socket) return;
       this.error.set("");
-      this.send("join", { name: this.name.trim(), role: this.role }, socket);
+      this.send(
+        "join",
+        { name: this.name.trim(), role: this.role, client_id: clientID },
+        socket,
+      );
     };
     socket.onmessage = (event: MessageEvent): void => {
       if (this.socket !== socket) return;
@@ -245,6 +251,16 @@ export class AppComponent {
         roles: this.roles,
       } satisfies RoomSettings),
     );
+  }
+  private clientID(): string {
+    const key = `${clientIDKeyPrefix}${this.roomId}`;
+    const saved = localStorage.getItem(key);
+    if (saved) return saved;
+    const clientID =
+      globalThis.crypto?.randomUUID?.() ??
+      `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    localStorage.setItem(key, clientID);
+    return clientID;
   }
   private clearReconnectTimer(): void {
     if (this.reconnectTimer === undefined) return;

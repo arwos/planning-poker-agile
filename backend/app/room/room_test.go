@@ -61,6 +61,30 @@ func TestLeadTransfersWhenLeadLeaves(t *testing.T) {
 	}
 }
 
+func TestReconnectReplacesParticipantAndProtectsNewConnection(t *testing.T) {
+	r, _ := New(nil, []string{"Backend"})
+	first := &Participant{ID: "first", Name: "Ann", Role: "Backend"}
+	if replaced, err := r.AddConnection(first, "client", "connection-1"); err != nil || replaced {
+		t.Fatalf("first connection: replaced=%v err=%v", replaced, err)
+	}
+	second := &Participant{ID: "second", Name: "Ann", Role: "Backend"}
+	if replaced, err := r.AddConnection(second, "client", "connection-2"); err != nil || !replaced {
+		t.Fatalf("reconnect: replaced=%v err=%v", replaced, err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("participant id changed: first=%q second=%q", first.ID, second.ID)
+	}
+	if got := len(r.Snapshot()["participants"].([]map[string]any)); got != 1 {
+		t.Fatalf("participants=%d", got)
+	}
+	if r.RemoveConnection(first.ID, "connection-1") {
+		t.Fatal("stale connection removed the replacement")
+	}
+	if !r.RemoveConnection(second.ID, "connection-2") {
+		t.Fatal("active connection was not removed")
+	}
+}
+
 func TestParticipantNameHasReasonableLimit(t *testing.T) {
 	r, _ := New(nil, []string{"Backend"})
 	if err := r.Add(&Participant{ID: "p", Name: "12345678901234567890123456789012345678901"}); err == nil {

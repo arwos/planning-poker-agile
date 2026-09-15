@@ -24,6 +24,8 @@ type Participant struct {
 	ID, Name, Role  string
 	Lead, Submitted bool
 	Selected        *float64
+	clientID        string
+	connectionID    string
 }
 type Room struct {
 	mu           sync.RWMutex
@@ -74,10 +76,15 @@ func newRoom(cards []float64, roles []string, maxCards, maxRoles int) (*Room, er
 	return &Room{ID: uuid.NewString(), Cards: cards, Roles: clean, Participants: map[string]*Participant{}, Votes: map[string]float64{}, RoleAverages: map[string]float64{}}, nil
 }
 func (r *Room) Add(p *Participant) error {
+	_, err := r.AddConnection(p, "", "")
+	return err
+}
+
+func (r *Room) AddConnection(p *Participant, clientID, connectionID string) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if p.Name == "" || utf8.RuneCountInString(p.Name) > 40 {
-		return ErrInvalid
+		return false, ErrInvalid
 	}
 	if p.Role != "" {
 		ok := false
@@ -87,15 +94,37 @@ func (r *Room) Add(p *Participant) error {
 			}
 		}
 		if !ok {
-			return ErrInvalid
+			return false, ErrInvalid
+		}
+	}
+	if clientID != "" {
+		for id, existing := range r.Participants {
+			if existing.clientID != clientID {
+				continue
+			}
+			p.ID = id
+			p.Lead = existing.Lead
+			if p.Role == existing.Role {
+				p.Submitted = existing.Submitted
+				p.Selected = existing.Selected
+			} else {
+				delete(r.Votes, id)
+			}
+			p.clientID = clientID
+			p.connectionID = connectionID
+			r.Participants[id] = p
+			return true, nil
 		}
 	}
 	if len(r.Participants) == 0 {
 		p.Lead = true
 	}
+	p.clientID = clientID
+	p.connectionID = connectionID
 	r.Participants[p.ID] = p
-	return nil
+	return false, nil
 }
+
 func (r *Room) Remove(id string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -108,6 +137,24 @@ func (r *Room) Remove(id string) bool {
 		}
 	}
 	return len(r.Participants) == 0
+}
+
+func (r *Room) RemoveConnection(id, connectionID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	participant := r.Participants[id]
+	if participant == nil || participant.connectionID != connectionID {
+		return false
+	}
+	wasLead := participant.Lead
+	delete(r.Participants, id)
+	if wasLead {
+		for _, next := range r.Participants {
+			next.Lead = true
+			break
+		}
+	}
+	return true
 }
 
 func (r *Room) IsEmpty() bool {

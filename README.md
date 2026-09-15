@@ -77,7 +77,7 @@ Set any room limit to `0` to disable that limit.
 | --- | --- | --- |
 | `POST` | `/api/rooms` | Creates a room from `{ "cards": [...], "roles": [...] }`. |
 | `GET` | `/api/rooms/{id}` | Returns public room state. |
-| `GET` | `/ws/rooms/{id}` | Opens a room WebSocket; first message must be `join`. |
+| `GET` | `/ws/rooms/{id}` | Opens a room WebSocket; first message must be `join` with `name`, `role`, and a stable private `client_id`. |
 | `GET` | `/healthz` | Liveness endpoint. |
 
 Only selected votes are private. Submitted votes become visible after the server reveals results. Room pages send `X-Robots-Tag: noindex` and are excluded from `robots.txt`.

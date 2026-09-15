@@ -34,11 +34,12 @@ type createRequest struct {
 	Roles []string  `json:"roles"`
 }
 type message struct {
-	Type  string   `json:"type"`
-	Name  string   `json:"name,omitempty"`
-	Role  string   `json:"role,omitempty"`
-	Value *float64 `json:"value,omitempty"`
-	Error string   `json:"error,omitempty"`
+	Type     string   `json:"type"`
+	Name     string   `json:"name,omitempty"`
+	Role     string   `json:"role,omitempty"`
+	ClientID string   `json:"client_id,omitempty"`
+	Value    *float64 `json:"value,omitempty"`
+	Error    string   `json:"error,omitempty"`
 }
 
 func (s *Server) Handler() http.Handler {
@@ -177,8 +178,14 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 		_ = wsjson.Write(connectionCtx, c, message{Type: "error", Error: "first message must be join"})
 		return
 	}
+	clientID := strings.TrimSpace(in.ClientID)
+	if len(clientID) > 128 {
+		clientID = ""
+	}
+	connectionID := uuid.NewString()
 	p := &room.Participant{ID: uuid.NewString(), Name: strings.TrimSpace(in.Name), Role: strings.TrimSpace(in.Role)}
-	if e = rm.Add(p); e != nil {
+	reconnected, e := rm.AddConnection(p, clientID, connectionID)
+	if e != nil {
 		_ = wsjson.Write(connectionCtx, c, message{Type: "error", Error: "name or role is invalid"})
 		return
 	}
@@ -188,18 +195,28 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 		defer cancelWrite()
 		_ = ss.Write(writeCtx, payload)
 	}
-	s.Hub.Add(id, p.ID, func(payload any) {
+	token, previousClose := s.Hub.AddConnection(id, p.ID, func(payload any) {
 		write(payload)
+	}, func() {
+		cancelConnection()
+		_ = c.Close(websocket.StatusGoingAway, "replaced by a newer connection")
 	})
+	if previousClose != nil {
+		previousClose()
+	}
 	defer func() {
-		s.Hub.Remove(id, p.ID)
-		if rm.Remove(p.ID) {
+		s.Hub.RemoveConnection(id, p.ID, token)
+		if rm.RemoveConnection(p.ID, connectionID) {
 			s.Registry.DeleteIfEmpty(id)
+			s.broadcast(id, map[string]any{"type": "participant_left", "state": rm.Snapshot()})
 		}
-		s.broadcast(id, map[string]any{"type": "participant_left", "state": rm.Snapshot()})
 	}()
 	write(map[string]any{"type": "room_state", "state": rm.Snapshot(), "self": p.ID})
-	s.broadcast(id, map[string]any{"type": "participant_joined", "state": rm.Snapshot()})
+	if reconnected {
+		s.broadcast(id, map[string]any{"type": "room_state", "state": rm.Snapshot()})
+	} else {
+		s.broadcast(id, map[string]any{"type": "participant_joined", "state": rm.Snapshot()})
+	}
 	go ss.Ping(connectionCtx, s.PingInterval)
 	for {
 		var m message

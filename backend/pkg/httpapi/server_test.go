@@ -183,3 +183,61 @@ func TestWebSocketAllowsWildcardOrigin(t *testing.T) {
 		t.Fatalf("status=%d", response.StatusCode)
 	}
 }
+
+func TestWebSocketReconnectReplacesStaleParticipant(t *testing.T) {
+	registry := room.NewRegistry(0)
+	rm, err := registry.Create(nil, []string{"Backend"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("local listeners unavailable: %v", err)
+	}
+	server := httptest.NewUnstartedServer((&Server{Registry: registry}).Handler())
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/rooms/" + rm.ID
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	clientID := "11111111-1111-4111-8111-111111111111"
+	first, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close(websocket.StatusNormalClosure, "")
+	if err := wsjson.Write(ctx, first, message{Type: "join", Name: "Ann", Role: "Backend", ClientID: clientID}); err != nil {
+		t.Fatal(err)
+	}
+	var firstState map[string]any
+	if err := wsjson.Read(ctx, first, &firstState); err != nil {
+		t.Fatal(err)
+	}
+
+	second, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close(websocket.StatusNormalClosure, "")
+	if err := wsjson.Write(ctx, second, message{Type: "join", Name: "Ann", Role: "Backend", ClientID: clientID}); err != nil {
+		t.Fatal(err)
+	}
+	var secondState map[string]any
+	if err := wsjson.Read(ctx, second, &secondState); err != nil {
+		t.Fatal(err)
+	}
+
+	participants := rm.Snapshot()["participants"].([]map[string]any)
+	if len(participants) != 1 {
+		t.Fatalf("participants after reconnect=%d", len(participants))
+	}
+	if err := first.Close(websocket.StatusGoingAway, "replaced"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if participants := rm.Snapshot()["participants"].([]map[string]any); len(participants) != 1 {
+		t.Fatalf("stale cleanup removed active participant: %d", len(participants))
+	}
+}
