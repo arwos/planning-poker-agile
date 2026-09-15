@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -77,13 +78,121 @@ func TestWebSocketJoinAndReveal(t *testing.T) {
 	}
 }
 
+func TestWebSocketRejectsInvalidMessage(t *testing.T) {
+	registry := room.NewRegistry(0)
+	rm, err := registry.Create(nil, []string{"Backend"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("local listeners unavailable: %v", err)
+	}
+	server := httptest.NewUnstartedServer((&Server{Registry: registry}).Handler())
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/rooms/" + rm.ID
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+	if err := wsjson.Write(ctx, conn, map[string]any{
+		"type":  "join",
+		"name":  "Ann",
+		"extra": true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var response message
+	if err := wsjson.Read(ctx, conn, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Type != "error" {
+		t.Fatalf("response type=%q, want error", response.Type)
+	}
+}
+
 func TestRejectsBadRoomPayload(t *testing.T) {
 	s := &Server{Registry: room.NewRegistry(0)}
 	request := httptest.NewRequest(http.MethodPost, "/api/rooms", bytes.NewBufferString(`{"cards":[1,1],"roles":[]}`))
+	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	s.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d", response.Code)
+	}
+}
+
+func TestCreateRejectsInvalidRequests(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		maxBytes   int64
+		wantStatus int
+	}{
+		{name: "unknown field", body: `{"cards":[1],"roles":["Backend"],"extra":true}`, wantStatus: http.StatusBadRequest},
+		{name: "trailing json", body: `{"cards":[1],"roles":["Backend"]}{}`, wantStatus: http.StatusBadRequest},
+		{name: "missing cards", body: `{"roles":["Backend"]}`, wantStatus: http.StatusBadRequest},
+		{name: "null cards", body: `{"cards":null,"roles":["Backend"]}`, wantStatus: http.StatusBadRequest},
+		{name: "wrong card type", body: `{"cards":["1"],"roles":["Backend"]}`, wantStatus: http.StatusBadRequest},
+		{name: "body too large", body: `{"cards":[1],"roles":["Backend"]}`, maxBytes: 8, wantStatus: http.StatusRequestEntityTooLarge},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Server{Registry: room.NewRegistry(0), MaxMessageBytes: tt.maxBytes}
+			request := httptest.NewRequest(http.MethodPost, "/api/rooms", bytes.NewBufferString(tt.body))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			s.Handler().ServeHTTP(response, request)
+			if response.Code != tt.wantStatus {
+				t.Fatalf("status=%d, want %d", response.Code, tt.wantStatus)
+			}
+		})
+	}
+}
+
+func TestCreateRejectsUnsupportedMediaType(t *testing.T) {
+	s := &Server{Registry: room.NewRegistry(0)}
+	request := httptest.NewRequest(http.MethodPost, "/api/rooms", bytes.NewBufferString(`{"cards":[1],"roles":["Backend"]}`))
+	request.Header.Set("Content-Type", "text/plain")
+	response := httptest.NewRecorder()
+	s.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("status=%d, want %d", response.Code, http.StatusUnsupportedMediaType)
+	}
+}
+
+func TestIncomingMessageValidation(t *testing.T) {
+	tests := []struct {
+		name  string
+		body  string
+		first bool
+		valid bool
+	}{
+		{name: "valid join", body: `{"type":"join","name":"Ann","role":"Backend","client_id":"client-1"}`, first: true, valid: true},
+		{name: "unknown field", body: `{"type":"join","name":"Ann","extra":true}`, first: true},
+		{name: "missing name", body: `{"type":"join","role":"Backend"}`, first: true},
+		{name: "unknown type", body: `{"type":"unknown"}`, first: false},
+		{name: "vote without value", body: `{"type":"vote_submitted"}`, first: false},
+		{name: "vote with unexpected field", body: `{"type":"vote_submitted","value":1,"name":"Ann"}`, first: false},
+		{name: "reset with value", body: `{"type":"reset","value":1}`, first: false},
+		{name: "valid vote", body: `{"type":"vote_selected","value":2}`, first: false, valid: true},
+		{name: "valid reset", body: `{"type":"reset"}`, first: false, valid: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var message incomingMessage
+			decodeErr := json.Unmarshal([]byte(tt.body), &message)
+			valid := decodeErr == nil && message.validate(tt.first) == nil
+			if valid != tt.valid {
+				t.Fatalf("valid=%v, want %v; decode error=%v", valid, tt.valid, decodeErr)
+			}
+		})
 	}
 }
 

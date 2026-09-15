@@ -1,6 +1,10 @@
 package room
 
-import "testing"
+import (
+	"math"
+	"strings"
+	"testing"
+)
 
 func TestVotesRevealAfterAllVotersSubmit(t *testing.T) {
 	r, err := New([]float64{1, 3, 5}, []string{"Backend", "QA"})
@@ -89,6 +93,27 @@ func TestParticipantNameHasReasonableLimit(t *testing.T) {
 	r, _ := New(nil, []string{"Backend"})
 	if err := r.Add(&Participant{ID: "p", Name: "12345678901234567890123456789012345678901"}); err == nil {
 		t.Fatal("expected long name to be rejected")
+	}
+}
+
+func TestRoomRejectsInvalidModelValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		cards []float64
+		roles []string
+	}{
+		{name: "negative card", cards: []float64{-1}, roles: []string{"Backend"}},
+		{name: "nan card", cards: []float64{math.NaN()}, roles: []string{"Backend"}},
+		{name: "infinite card", cards: []float64{math.Inf(1)}, roles: []string{"Backend"}},
+		{name: "duplicate role", cards: []float64{1}, roles: []string{"Backend", "backend"}},
+		{name: "long role", cards: []float64{1}, roles: []string{strings.Repeat("x", maxRoleNameLength+1)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := New(tt.cards, tt.roles); err == nil {
+				t.Fatal("expected invalid room model")
+			}
+		})
 	}
 }
 

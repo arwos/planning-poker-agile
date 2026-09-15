@@ -6,9 +6,13 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"math"
+	"mime"
 	"net/http"
 	"net/url"
 	"strings"
@@ -30,8 +34,8 @@ type Server struct {
 	Hub             *realtime.Hub
 }
 type createRequest struct {
-	Cards []float64 `json:"cards"`
-	Roles []string  `json:"roles"`
+	Cards *[]float64 `json:"cards"`
+	Roles *[]string  `json:"roles"`
 }
 type message struct {
 	Type     string   `json:"type"`
@@ -41,6 +45,113 @@ type message struct {
 	Value    *float64 `json:"value,omitempty"`
 	Error    string   `json:"error,omitempty"`
 }
+
+type incomingMessage struct {
+	Type     string   `json:"type"`
+	Name     *string  `json:"name"`
+	Role     *string  `json:"role"`
+	ClientID *string  `json:"client_id"`
+	Value    *float64 `json:"value"`
+
+	decodeFailed bool
+	nameSet      bool
+	roleSet      bool
+	clientIDSet  bool
+	valueSet     bool
+}
+
+func (m *incomingMessage) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	*m = incomingMessage{}
+	if !json.Valid(trimmed) {
+		return errors.New("invalid JSON message")
+	}
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		m.decodeFailed = true
+		return nil
+	}
+	type plainIncomingMessage incomingMessage
+	var decoded plainIncomingMessage
+	if err := decodeStrictJSON(bytes.NewReader(trimmed), &decoded); err != nil {
+		m.decodeFailed = true
+		return nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &fields); err != nil {
+		return err
+	}
+	*m = incomingMessage(decoded)
+	_, m.nameSet = fields["name"]
+	_, m.roleSet = fields["role"]
+	_, m.clientIDSet = fields["client_id"]
+	_, m.valueSet = fields["value"]
+	return nil
+}
+
+func (m incomingMessage) validate(first bool) error {
+	if m.decodeFailed {
+		return errors.New("invalid message")
+	}
+	if m.Type == "" {
+		return errors.New("message type is required")
+	}
+	if first && m.Type != "join" {
+		return errors.New("first message must be join")
+	}
+	if !first && m.Type == "join" {
+		return errors.New("join is only valid as the first message")
+	}
+	switch m.Type {
+	case "join":
+		if m.Name == nil || strings.TrimSpace(*m.Name) == "" || !m.nameSet {
+			return errors.New("name is required")
+		}
+		if (m.roleSet && m.Role == nil) || (m.clientIDSet && m.ClientID == nil) {
+			return errors.New("invalid join fields")
+		}
+		if m.valueSet {
+			return errors.New("value is not valid for join")
+		}
+		if m.ClientID != nil && len(strings.TrimSpace(*m.ClientID)) > 128 {
+			return errors.New("client_id is too long")
+		}
+	case "vote_selected", "vote_submitted":
+		if !m.valueSet || m.Value == nil || math.IsNaN(*m.Value) || math.IsInf(*m.Value, 0) {
+			return errors.New("finite value is required")
+		}
+		if m.nameSet || m.roleSet || m.clientIDSet {
+			return errors.New("unexpected vote fields")
+		}
+	case "reset":
+		if m.nameSet || m.roleSet || m.clientIDSet || m.valueSet {
+			return errors.New("reset does not accept fields")
+		}
+	default:
+		return errors.New("unknown message type")
+	}
+	return nil
+}
+
+func decodeStrictJSON(reader io.Reader, target any) error {
+	decoder := json.NewDecoder(reader)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return errors.New("multiple JSON values")
+		}
+		return err
+	}
+	return nil
+}
+
+var (
+	errRequestTooLarge  = errors.New("request body too large")
+	errUnsupportedMedia = errors.New("content type must be application/json")
+)
 
 func (s *Server) Handler() http.Handler {
 	if s.PingInterval <= 0 {
@@ -66,6 +177,10 @@ func (s *Server) getRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/api/rooms/")
+	if _, err := uuid.Parse(id); err != nil {
+		http.Error(w, "invalid room", http.StatusBadRequest)
+		return
+	}
 	rm, err := s.Registry.Get(id)
 	if err != nil {
 		http.Error(w, "room not found", http.StatusNotFound)
@@ -127,12 +242,25 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
-	var in createRequest
-	if json.NewDecoder(r.Body).Decode(&in) != nil {
-		http.Error(w, "invalid json", 400)
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		http.Error(w, errUnsupportedMedia.Error(), http.StatusUnsupportedMediaType)
 		return
 	}
-	x, e := s.Registry.Create(in.Cards, in.Roles)
+	var in createRequest
+	if err := s.decodeJSONBody(w, r, &in); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errRequestTooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		http.Error(w, "invalid request", status)
+		return
+	}
+	if in.Cards == nil || in.Roles == nil {
+		http.Error(w, "cards and roles are required", http.StatusBadRequest)
+		return
+	}
+	x, e := s.Registry.Create(*in.Cards, *in.Roles)
 	if e != nil {
 		if errors.Is(e, room.ErrCapacity) {
 			http.Error(w, e.Error(), http.StatusTooManyRequests)
@@ -143,6 +271,18 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"id": x.ID, "url": "/room/" + x.ID})
+}
+
+func (s *Server) decodeJSONBody(w http.ResponseWriter, r *http.Request, target any) error {
+	limited := http.MaxBytesReader(w, r.Body, s.MaxMessageBytes)
+	if err := decodeStrictJSON(limited, target); err != nil {
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			return errRequestTooLarge
+		}
+		return err
+	}
+	return nil
 }
 func (s *Server) broadcast(id string, payload any) {
 	s.Hub.Broadcast(id, payload)
@@ -170,20 +310,28 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 	defer c.Close(websocket.StatusNormalClosure, "")
 	connectionCtx, cancelConnection := context.WithCancel(context.WithoutCancel(r.Context()))
 	defer cancelConnection()
-	var in message
+	var in incomingMessage
 	if wsjson.Read(connectionCtx, c, &in) != nil {
 		return
 	}
-	if in.Type != "join" {
-		_ = wsjson.Write(connectionCtx, c, message{Type: "error", Error: "first message must be join"})
+	if err := in.validate(true); err != nil {
+		_ = wsjson.Write(connectionCtx, c, message{Type: "error", Error: err.Error()})
 		return
 	}
-	clientID := strings.TrimSpace(in.ClientID)
+	name := strings.TrimSpace(*in.Name)
+	role := ""
+	if in.Role != nil {
+		role = strings.TrimSpace(*in.Role)
+	}
+	clientID := ""
+	if in.ClientID != nil {
+		clientID = strings.TrimSpace(*in.ClientID)
+	}
 	if len(clientID) > 128 {
 		clientID = ""
 	}
 	connectionID := uuid.NewString()
-	p := &room.Participant{ID: uuid.NewString(), Name: strings.TrimSpace(in.Name), Role: strings.TrimSpace(in.Role)}
+	p := &room.Participant{ID: uuid.NewString(), Name: name, Role: role}
 	reconnected, e := rm.AddConnection(p, clientID, connectionID)
 	if e != nil {
 		_ = wsjson.Write(connectionCtx, c, message{Type: "error", Error: "name or role is invalid"})
@@ -219,8 +367,12 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 	}
 	go ss.Ping(connectionCtx, s.PingInterval)
 	for {
-		var m message
+		var m incomingMessage
 		if e := wsjson.Read(connectionCtx, c, &m); e != nil {
+			return
+		}
+		if err := m.validate(false); err != nil {
+			write(message{Type: "error", Error: err.Error()})
 			return
 		}
 		switch m.Type {

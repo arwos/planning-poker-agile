@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"github.com/arwos/planning-poker-agile/app/voting"
 	"github.com/google/uuid"
+	"math"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -19,6 +20,11 @@ var DefaultCards = []float64{0, .5, 1, 2, 3, 5, 8}
 var ErrNotFound = errors.New("room not found")
 var ErrInvalid = errors.New("invalid room data")
 var ErrCapacity = errors.New("room capacity reached")
+
+const (
+	maxParticipantNameLength = 40
+	maxRoleNameLength        = 40
+)
 
 type Participant struct {
 	ID, Name, Role  string
@@ -52,7 +58,7 @@ func newRoom(cards []float64, roles []string, maxCards, maxRoles int) (*Room, er
 	}
 	seen := map[float64]bool{}
 	for _, c := range cards {
-		if c < 0 || seen[c] {
+		if math.IsNaN(c) || math.IsInf(c, 0) || c < 0 || seen[c] {
 			return nil, ErrInvalid
 		}
 		seen[c] = true
@@ -61,7 +67,7 @@ func newRoom(cards []float64, roles []string, maxCards, maxRoles int) (*Room, er
 	clean := []string{}
 	for _, r := range roles {
 		r = strings.TrimSpace(r)
-		if r == "" || rseen[strings.ToLower(r)] {
+		if !utf8.ValidString(r) || r == "" || utf8.RuneCountInString(r) > maxRoleNameLength || rseen[strings.ToLower(r)] {
 			return nil, ErrInvalid
 		}
 		rseen[strings.ToLower(r)] = true
@@ -83,7 +89,7 @@ func (r *Room) Add(p *Participant) error {
 func (r *Room) AddConnection(p *Participant, clientID, connectionID string) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if p.Name == "" || utf8.RuneCountInString(p.Name) > 40 {
+	if !utf8.ValidString(p.Name) || p.Name == "" || utf8.RuneCountInString(p.Name) > maxParticipantNameLength {
 		return false, ErrInvalid
 	}
 	if p.Role != "" {
@@ -94,6 +100,9 @@ func (r *Room) AddConnection(p *Participant, clientID, connectionID string) (boo
 			}
 		}
 		if !ok {
+			return false, ErrInvalid
+		}
+		if utf8.RuneCountInString(p.Role) > maxRoleNameLength {
 			return false, ErrInvalid
 		}
 	}
@@ -167,6 +176,9 @@ func (r *Room) Vote(id string, value float64, submit bool) (bool, error) {
 	defer r.mu.Unlock()
 	p, ok := r.Participants[id]
 	if !ok || p.Role == "" || r.Revealed {
+		return false, ErrInvalid
+	}
+	if math.IsNaN(value) || math.IsInf(value, 0) {
 		return false, ErrInvalid
 	}
 	valid := false
